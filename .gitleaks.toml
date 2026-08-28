@@ -1,0 +1,11 @@
+title = "Veil Keepers Gitleaks Config"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Placeholder environment file and non-secret data fixtures"
+paths = [
+  '''(^|/)\.env\.example$''',
+  '''(^|/)data/''',
+]

@@ -1,0 +1,43 @@
+# Veil Keepers — Sprint 1 infrastructure.
+# MySQL 8.4 + Go API. Secrets come from .env (see .env.example); every
+# value below has a safe interpolation default so compose works standalone.
+
+services:
+  veilkeepers-mysql:
+    image: mysql:8.4
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-change-me-root}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-veilkeepers}
+      MYSQL_USER: ${MYSQL_USER:-veilkeepers}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-change-me-app}
+    volumes:
+      - mysql-data:/var/lib/mysql
+      - ./infra/mysql/conf/veilkeepers.cnf:/etc/mysql/conf.d/veilkeepers.cnf:ro
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -u $$MYSQL_USER -p$$MYSQL_PASSWORD"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    restart: unless-stopped
+
+  veilkeepers-api:
+    build: ./backend
+    depends_on:
+      veilkeepers-mysql:
+        condition: service_healthy
+    ports:
+      - "${VK_HOST_PORT:-18080}:${VK_PORT:-8080}"
+    environment:
+      VK_PORT: ${VK_PORT:-8080}
+      VK_DB_DSN: ${MYSQL_USER:-veilkeepers}:${MYSQL_PASSWORD:-change-me-app}@tcp(veilkeepers-mysql:3306)/${MYSQL_DATABASE:-veilkeepers}
+      REGISTRATION_OPEN: ${REGISTRATION_OPEN:-true}
+    healthcheck:
+      test: ["CMD", "/veilkeepers-api", "-healthcheck"]
+      interval: 10s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+
+volumes:
+  mysql-data:

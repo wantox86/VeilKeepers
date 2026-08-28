@@ -1,0 +1,7 @@
+# Veil Keepers — MySQL 8.4 tuning for low-resource dev/self-hosted runs.
+[mysqld]
+innodb_buffer_pool_size=128M
+performance_schema=OFF
+# mysqlx variables are removed in MySQL 9.x — delete this line if the image tag is bumped
+mysqlx=0
+max_connections=50

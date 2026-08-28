@@ -1,0 +1,47 @@
+name: Backend
+
+on:
+  push:
+    paths: ['backend/**', 'infra/**', 'docker-compose.yml', '.env.example', '.github/workflows/backend.yml']
+  pull_request:
+    paths: ['backend/**', 'infra/**', 'docker-compose.yml', '.env.example', '.github/workflows/backend.yml']
+
+concurrency:
+  group: backend-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    working-directory: backend
+
+jobs:
+  build-test:
+    name: Build & Test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+          cache: true
+
+      - name: Check formatting
+        run: test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test
+        run: go test ./...
+
+      - name: Build
+        run: go build ./...
+
+      # Verification only — no push. Runs from the repo root because the
+      # Dockerfile lives at backend/Dockerfile and needs the module context.
+      - name: Build Docker image (verify only)
+        working-directory: .
+        run: docker build ./backend

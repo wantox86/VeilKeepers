@@ -1,0 +1,23 @@
+# --- Secrets & local env ---
+.env
+
+# --- Runtime data (keep .gitkeep placeholders) ---
+data/**
+!data/**/
+!data/**/.gitkeep
+
+# --- Android build artifacts ---
+android/.gradle/
+**/build/
+local.properties
+*.apk
+
+# --- Go build output ---
+backend/bin/
+
+# --- OS files ---
+.DS_Store
+
+# --- IDE ---
+.idea/
+*.iml
