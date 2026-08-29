@@ -10,7 +10,7 @@ import (
 )
 
 func TestHealthReturnsOK(t *testing.T) {
-	mux := New(config.Config{Port: "8080"})
+	mux := New(config.Config{Port: "8080"}, Deps{})
 
 	req := httptest.NewRequest(http.MethodGet, "/health", nil)
 	rec := httptest.NewRecorder()
@@ -28,7 +28,7 @@ func TestHealthReturnsOK(t *testing.T) {
 }
 
 func TestReadyUnavailableWhenDSNEmpty(t *testing.T) {
-	mux := New(config.Config{Port: "8080", DBDSN: ""})
+	mux := New(config.Config{Port: "8080", DBDSN: ""}, Deps{})
 
 	req := httptest.NewRequest(http.MethodGet, "/ready", nil)
 	rec := httptest.NewRecorder()
@@ -42,21 +42,21 @@ func TestReadyUnavailableWhenDSNEmpty(t *testing.T) {
 	}
 }
 
-func TestReadyUnavailableWhenDSNUnreachable(t *testing.T) {
-	// Port 1 on loopback is effectively guaranteed to refuse connections,
-	// so the ping fails well inside the readiness timeout.
+func TestReadyUnavailableWhenDBNil(t *testing.T) {
+	// Without a configured database pool (empty VK_DB_DSN) the readiness
+	// probe reports unavailable; behavior preserved from Sprint 1.
 	cfg := config.Config{
 		Port:  "8080",
 		DBDSN: "veilkeepers:test@tcp(127.0.0.1:1)/veilkeepers?timeout=1s",
 	}
-	mux := New(cfg)
+	mux := New(cfg, Deps{})
 
 	req := httptest.NewRequest(http.MethodGet, "/ready", nil)
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusServiceUnavailable {
-		t.Fatalf("GET /ready (unreachable DSN) status = %d, want %d", rec.Code, http.StatusServiceUnavailable)
+		t.Fatalf("GET /ready (nil DB) status = %d, want %d", rec.Code, http.StatusServiceUnavailable)
 	}
 	if got := rec.Body.String(); got != `{"status":"unavailable"}` {
 		t.Fatalf("GET /ready body = %q, want %q", got, `{"status":"unavailable"}`)
@@ -64,7 +64,7 @@ func TestReadyUnavailableWhenDSNUnreachable(t *testing.T) {
 }
 
 func TestNonGETMethodsRejected(t *testing.T) {
-	mux := New(config.Config{Port: "8080"})
+	mux := New(config.Config{Port: "8080"}, Deps{})
 
 	for _, path := range []string{"/health", "/ready"} {
 		for _, method := range []string{http.MethodPost, http.MethodPut, http.MethodDelete} {

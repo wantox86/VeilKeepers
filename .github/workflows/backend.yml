@@ -18,6 +18,21 @@ jobs:
   build-test:
     name: Build & Test
     runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: change-me-root
+          MYSQL_DATABASE: veilkeepers
+          MYSQL_USER: veilkeepers
+          MYSQL_PASSWORD: test-pass
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd "mysqladmin ping -h 127.0.0.1 -uroot -pchange-me-root"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 24
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -36,6 +51,8 @@ jobs:
 
       - name: Test
         run: go test ./...
+        env:
+          VK_TEST_DSN: "veilkeepers:test-pass@tcp(127.0.0.1:3306)/veilkeepers?parseTime=true&timeout=5s"
 
       - name: Build
         run: go build ./...

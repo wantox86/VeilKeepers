@@ -36,7 +36,7 @@ services:
       test: ["CMD", "/veilkeepers-api", "-healthcheck"]
       interval: 10s
       retries: 5
-      start_period: 10s
+      start_period: 40s
     restart: unless-stopped
 
 volumes:
