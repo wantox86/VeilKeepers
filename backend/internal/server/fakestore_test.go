@@ -16,11 +16,13 @@ import (
 // handler and middleware tests. Username uniqueness is case-insensitive,
 // mirroring the database collation.
 type fakeStore struct {
-	mu       sync.Mutex
-	users    map[string]*fakeUser // keyed by lowercase username
-	devices  map[uint64]*store.Device
-	sessions map[uint64]*fakeSession
-	nextID   uint64
+	mu         sync.Mutex
+	users      map[string]*fakeUser // keyed by lowercase username
+	devices    map[uint64]*store.Device
+	sessions   map[uint64]*fakeSession
+	categories map[uint64]*fakeCategory
+	items      map[uint64]*fakeItem
+	nextID     uint64
 }
 
 type fakeUser struct {
@@ -43,12 +45,31 @@ type fakeSession struct {
 	createdAt time.Time
 }
 
+type fakeCategory struct {
+	id            uint64
+	userID        uint64
+	encryptedName []byte
+	createdAt     time.Time
+	updatedAt     time.Time
+}
+
+type fakeItem struct {
+	id        uint64
+	userID    uint64
+	category  *uint64
+	payload   []byte
+	createdAt time.Time
+	updatedAt time.Time
+}
+
 func newFakeStore() *fakeStore {
 	return &fakeStore{
-		users:    make(map[string]*fakeUser),
-		devices:  make(map[uint64]*store.Device),
-		sessions: make(map[uint64]*fakeSession),
-		nextID:   1,
+		users:      make(map[string]*fakeUser),
+		devices:    make(map[uint64]*store.Device),
+		sessions:   make(map[uint64]*fakeSession),
+		categories: make(map[uint64]*fakeCategory),
+		items:      make(map[uint64]*fakeItem),
+		nextID:     1,
 	}
 }
 
@@ -264,6 +285,223 @@ func (f *fakeStore) RevokeDeviceAndSessions(_ context.Context, userID, deviceID 
 		}
 	}
 	return nil
+}
+
+// CreateCategory implements apiStore.
+func (f *fakeStore) CreateCategory(_ context.Context, userID uint64, encryptedName []byte) (*store.Category, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	now := time.Now().UTC()
+	c := &fakeCategory{
+		id:            f.allocID(),
+		userID:        userID,
+		encryptedName: append([]byte(nil), encryptedName...),
+		createdAt:     now,
+		updatedAt:     now,
+	}
+	f.categories[c.id] = c
+	return f.categoryLocked(c), nil
+}
+
+// categoryLocked builds a store.Category copy; caller holds f.mu.
+func (f *fakeStore) categoryLocked(c *fakeCategory) *store.Category {
+	var count int64
+	for _, it := range f.items {
+		if it.userID == c.userID && it.category != nil && *it.category == c.id {
+			count++
+		}
+	}
+	return &store.Category{
+		ID:            c.id,
+		UserID:        c.userID,
+		EncryptedName: append([]byte(nil), c.encryptedName...),
+		ItemCount:     count,
+		CreatedAt:     c.createdAt,
+		UpdatedAt:     c.updatedAt,
+	}
+}
+
+// ListCategories implements apiStore, mirroring the SQL ORDER BY
+// updated_at DESC, id DESC and the LIMIT behaviour.
+func (f *fakeStore) ListCategories(_ context.Context, userID uint64, limit int) ([]store.Category, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	out := make([]store.Category, 0)
+	for _, c := range f.categories {
+		if c.userID == userID {
+			out = append(out, *f.categoryLocked(c))
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if !out[i].UpdatedAt.Equal(out[j].UpdatedAt) {
+			return out[i].UpdatedAt.After(out[j].UpdatedAt)
+		}
+		return out[i].ID > out[j].ID
+	})
+	if len(out) > limit {
+		out = out[:limit]
+	}
+	return out, nil
+}
+
+// UpdateCategory implements apiStore.
+func (f *fakeStore) UpdateCategory(_ context.Context, userID, categoryID uint64, encryptedName []byte) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	c, ok := f.categories[categoryID]
+	if !ok || c.userID != userID {
+		return store.ErrNotFound
+	}
+	c.encryptedName = append([]byte(nil), encryptedName...)
+	c.updatedAt = time.Now().UTC()
+	return nil
+}
+
+// DeleteCategoryAndReassign implements apiStore: the category's items
+// are moved to Uncategorized (category_id NULL) and the category row is
+// deleted, or ErrNotFound when missing/foreign.
+func (f *fakeStore) DeleteCategoryAndReassign(_ context.Context, userID, categoryID uint64) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	c, ok := f.categories[categoryID]
+	if !ok || c.userID != userID {
+		return store.ErrNotFound
+	}
+	for _, it := range f.items {
+		if it.userID == userID && it.category != nil && *it.category == categoryID {
+			it.category = nil
+		}
+	}
+	delete(f.categories, categoryID)
+	return nil
+}
+
+// CreateItem implements apiStore, rejecting references to categories
+// owned by other users (anti FK-planting).
+func (f *fakeStore) CreateItem(_ context.Context, userID uint64, categoryID *uint64, payload []byte) (*store.VaultItem, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	var category *uint64
+	if categoryID != nil {
+		c, ok := f.categories[*categoryID]
+		if !ok || c.userID != userID {
+			return nil, store.ErrNotFound
+		}
+		id := c.id
+		category = &id
+	}
+
+	now := time.Now().UTC()
+	it := &fakeItem{
+		id:        f.allocID(),
+		userID:    userID,
+		category:  category,
+		payload:   append([]byte(nil), payload...),
+		createdAt: now,
+		updatedAt: now,
+	}
+	f.items[it.id] = it
+	return f.itemLocked(it), nil
+}
+
+// itemLocked builds a store.VaultItem copy; caller holds f.mu.
+func (f *fakeStore) itemLocked(it *fakeItem) *store.VaultItem {
+	v := &store.VaultItem{
+		ID:               it.id,
+		UserID:           it.userID,
+		EncryptedPayload: append([]byte(nil), it.payload...),
+		CreatedAt:        it.createdAt,
+		UpdatedAt:        it.updatedAt,
+	}
+	if it.category != nil {
+		id := *it.category
+		v.CategoryID = &id
+	}
+	return v
+}
+
+// GetItem implements apiStore.
+func (f *fakeStore) GetItem(_ context.Context, userID, itemID uint64) (*store.VaultItem, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	it, ok := f.items[itemID]
+	if !ok || it.userID != userID {
+		return nil, store.ErrNotFound
+	}
+	return f.itemLocked(it), nil
+}
+
+// UpdateItem implements apiStore.
+func (f *fakeStore) UpdateItem(_ context.Context, userID, itemID uint64, categoryID *uint64, payload []byte) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	it, ok := f.items[itemID]
+	if !ok || it.userID != userID {
+		return store.ErrNotFound
+	}
+	var category *uint64
+	if categoryID != nil {
+		c, ok := f.categories[*categoryID]
+		if !ok || c.userID != userID {
+			return store.ErrNotFound
+		}
+		id := c.id
+		category = &id
+	}
+	it.category = category
+	it.payload = append([]byte(nil), payload...)
+	it.updatedAt = time.Now().UTC()
+	return nil
+}
+
+// DeleteItem implements apiStore.
+func (f *fakeStore) DeleteItem(_ context.Context, userID, itemID uint64) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	it, ok := f.items[itemID]
+	if !ok || it.userID != userID {
+		return store.ErrNotFound
+	}
+	delete(f.items, itemID)
+	return nil
+}
+
+// ListItems implements apiStore, mirroring the SQL WHERE/ORDER BY/LIMIT
+// semantics (ordering: updated_at DESC, id DESC).
+func (f *fakeStore) ListItems(_ context.Context, userID uint64, categoryID *uint64, limit int) ([]store.VaultItem, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	out := make([]store.VaultItem, 0)
+	for _, it := range f.items {
+		if it.userID != userID {
+			continue
+		}
+		if categoryID != nil {
+			if it.category == nil || *it.category != *categoryID {
+				continue
+			}
+		}
+		out = append(out, *f.itemLocked(it))
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if !out[i].UpdatedAt.Equal(out[j].UpdatedAt) {
+			return out[i].UpdatedAt.After(out[j].UpdatedAt)
+		}
+		return out[i].ID > out[j].ID
+	})
+	if len(out) > limit {
+		out = out[:limit]
+	}
+	return out, nil
 }
 
 // expireAllSessions force-expires every session; used to test the

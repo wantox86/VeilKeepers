@@ -36,6 +36,15 @@ type apiStore interface {
 	ListDevices(ctx context.Context, userID uint64) ([]store.Device, error)
 	GetDevice(ctx context.Context, userID, deviceID uint64) (*store.Device, error)
 	RevokeDeviceAndSessions(ctx context.Context, userID, deviceID uint64) error
+	CreateCategory(ctx context.Context, userID uint64, encryptedName []byte) (*store.Category, error)
+	ListCategories(ctx context.Context, userID uint64, limit int) ([]store.Category, error)
+	UpdateCategory(ctx context.Context, userID, categoryID uint64, encryptedName []byte) error
+	DeleteCategoryAndReassign(ctx context.Context, userID, categoryID uint64) error
+	CreateItem(ctx context.Context, userID uint64, categoryID *uint64, payload []byte) (*store.VaultItem, error)
+	GetItem(ctx context.Context, userID, itemID uint64) (*store.VaultItem, error)
+	UpdateItem(ctx context.Context, userID, itemID uint64, categoryID *uint64, payload []byte) error
+	DeleteItem(ctx context.Context, userID, itemID uint64) error
+	ListItems(ctx context.Context, userID uint64, categoryID *uint64, limit int) ([]store.VaultItem, error)
 }
 
 // New builds the HTTP mux for the API. Non-GET methods on known paths are
@@ -56,6 +65,8 @@ func registerAPIRoutes(mux *http.ServeMux, cfg config.Config, svc *auth.Service,
 	}
 	registerAuthRoutes(mux, cfg, svc, st, limiter)
 	registerDeviceRoutes(mux, st)
+	registerCategoryRoutes(mux, st)
+	registerVaultRoutes(mux, st)
 }
 
 // handleHealth is the liveness probe: always 200 if the process serves HTTP.

@@ -17,7 +17,11 @@ import (
 // schema_migrations is NOT atomic — a crash in between replays the
 // statement on the next start. Every migration file must therefore
 // contain idempotent DDL (e.g. CREATE TABLE IF NOT EXISTS) so a
-// re-application is a safe no-op.
+// re-application is a safe no-op. The bookkeeping insert is likewise
+// concurrency-tolerant (INSERT IGNORE): since the DDL is idempotent, two
+// concurrent migrators (parallel test packages, or multi-replica startup)
+// applying the same file and racing on the bookkeeping row is benign and
+// must not fail startup or tests.
 //
 //go:embed migrations/*.sql
 var migrationFS embed.FS
@@ -101,8 +105,12 @@ func Migrate(ctx context.Context, db *sql.DB) error {
 			return fmt.Errorf("apply migration %s: %w", name, err)
 		}
 
+		// INSERT IGNORE (not plain INSERT): concurrent migrators may both
+		// apply the same idempotent migration and race on this row; losing
+		// the race is benign and must not surface as a 1062 failure. All
+		// other errors stay fail-fast.
 		if _, err := db.ExecContext(ctx,
-			`INSERT INTO schema_migrations (filename, applied_at) VALUES (?, NOW(6))`,
+			`INSERT IGNORE INTO schema_migrations (filename, applied_at) VALUES (?, NOW(6))`,
 			name,
 		); err != nil {
 			return fmt.Errorf("record migration %s: %w", name, err)
