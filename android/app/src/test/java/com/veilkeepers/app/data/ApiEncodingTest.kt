@@ -4,6 +4,7 @@ import com.veilkeepers.app.crypto.AuthHash
 import com.veilkeepers.app.crypto.KdfParams
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
+import org.junit.Assert.fail
 import org.junit.Test
 
 /**
@@ -84,6 +85,31 @@ class ApiEncodingTest {
         assertEquals(authHashB64, body.getString("auth_hash"))
         assertEquals("0f9c1c2e-9d3a-4b8e-8f2a-6d1c9e5b3a70", body.getString("device_identifier"))
         assertEquals("Pixel 8", body.getString("device_name"))
+    }
+
+    @Test
+    fun kdfParamsClampsRejectAbsurdServerValues() {
+        // Absurd server-supplied params (e.g. MITM'd kdf response) must be
+        // rejected BEFORE any derivation happens — DoS clamp (KdfParams.MAX_*).
+        for (json in listOf(
+            """{"m":${Int.MAX_VALUE},"t":3,"p":4}""",
+            """{"m":65536,"t":1000000000,"p":4}""",
+            """{"m":65536,"t":3,"p":1000000000}""",
+        )) {
+            try {
+                KdfParams.parseFrom(json)
+                fail("expected rejection of $json")
+            } catch (expected: IllegalArgumentException) {
+                // expected — above the m/t/p ceilings
+            }
+        }
+        // Ceiling values are accepted...
+        assertEquals(
+            KdfParams(KdfParams.MAX_M_KIB, KdfParams.MAX_T, KdfParams.MAX_P),
+            KdfParams.parseFrom("""{"m":1048576,"t":16,"p":16}"""),
+        )
+        // ...and the frozen spec params are accepted.
+        assertEquals(KdfParams.SPEC, KdfParams.parseFrom("""{"m":65536,"t":3,"p":4}"""))
     }
 
     @Test

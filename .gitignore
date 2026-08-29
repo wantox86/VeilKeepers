@@ -1,6 +1,9 @@
 # --- Secrets & local env ---
 .env
 
+# --- Local verification helper scripts ---
+.vk-*
+
 # --- Runtime data (keep .gitkeep placeholders) ---
 data/**
 !data/**/

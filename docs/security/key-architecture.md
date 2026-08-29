@@ -115,8 +115,12 @@ reverse-proxy HTTPS per spec.md §43.
 
 - Active VK lives **in memory only** while the vault is unlocked (ViewModel
   state); it is never written to disk.
-- `device_identifier` is a random UUID created once on first access and kept in
+- `device_identifier` is a random UUID created once and kept in
   EncryptedSharedPreferences (spec-1.md §B.12); `device_name` is `Build.MODEL`.
+- Degradation path: if the Android Keystore is corrupt and
+  EncryptedSharedPreferences cannot be created, session material is kept
+  memory-only (never in plain SharedPreferences) and the user must re-login
+  after process death; the fallback is logged once, secret-free.
 - Biometric unlock (later sprint): VK wrapped by an Android Keystore key with
   `setUserAuthenticationRequired(true)`, blob in EncryptedSharedPreferences;
   auto-lock wipes the VK from memory.

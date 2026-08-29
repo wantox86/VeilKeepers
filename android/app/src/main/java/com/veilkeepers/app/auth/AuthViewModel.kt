@@ -37,6 +37,8 @@ fun errorUiMessage(error: Throwable): String = when (error) {
     is ApiError.RateLimited ->
         "Too many attempts. Please wait about a minute, then try again."
     is ApiError -> error.message ?: "Something went wrong. Please try again."
+    // e.g. server-URL validation failures from AuthRepository.normalizeUrl.
+    is IllegalArgumentException -> error.message ?: "Something went wrong. Please try again."
     else -> "Something went wrong. Please try again."
 }
 

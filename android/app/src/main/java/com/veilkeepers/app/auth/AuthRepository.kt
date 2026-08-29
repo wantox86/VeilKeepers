@@ -52,14 +52,24 @@ class AuthRepository(
         val api = apiFactory(base)
 
         onPhase(AuthPhase.DERIVING)
-        val salt = Argon2Kdf.randomSalt()
-        val derived = Argon2Kdf.derive(password, salt, kdfParams)
-        val (kek, verifier) = Argon2Kdf.split(derived)
-        derived.fill(0)
+        var salt: ByteArray? = null
+        var derived: ByteArray? = null
+        var kek: ByteArray? = null
+        var verifier: ByteArray? = null
+        var digest: ByteArray? = null
+        var vaultKey: ByteArray? = null
+        var wrapped: ByteArray? = null
+        var returned = false
         try {
-            val authHashB64 = AuthHash.toBase64(AuthHash.of(verifier))
-            val vaultKey = VaultKey.generate()
-            val wrapped = VaultKey.wrap(vaultKey, kek)
+            salt = Argon2Kdf.randomSalt()
+            derived = Argon2Kdf.derive(password, salt, kdfParams)
+            val split = Argon2Kdf.split(derived)
+            kek = split.first
+            verifier = split.second
+            digest = AuthHash.of(verifier)
+            val authHashB64 = AuthHash.toBase64(digest)
+            vaultKey = VaultKey.generate()
+            wrapped = VaultKey.wrap(vaultKey, kek)
 
             onPhase(AuthPhase.NETWORK)
             api.register(
@@ -72,10 +82,16 @@ class AuthRepository(
             // Reuse the derived verifier — saves a second 2–8 s derivation.
             val login = api.login(username, authHashB64, storage.deviceIdentifier, storage.deviceName())
             saveSession(base, username, login)
-            vaultKey
+            returned = true
+            vaultKey!!
         } finally {
-            kek.fill(0)
-            verifier.fill(0)
+            salt?.fill(0)
+            derived?.fill(0)
+            kek?.fill(0)
+            verifier?.fill(0)
+            digest?.fill(0)
+            wrapped?.fill(0)
+            if (!returned) vaultKey?.fill(0)
         }
     }
 
@@ -99,20 +115,35 @@ class AuthRepository(
         val info = api.getKdf(username)
 
         onPhase(AuthPhase.DERIVING)
-        val salt = AuthHash.fromBase64(info.saltB64)
-        val derived = Argon2Kdf.derive(password, salt, info.params)
-        val (kek, verifier) = Argon2Kdf.split(derived)
-        derived.fill(0)
+        var salt: ByteArray? = null
+        var derived: ByteArray? = null
+        var kek: ByteArray? = null
+        var verifier: ByteArray? = null
+        var digest: ByteArray? = null
+        var wrappedBlob: ByteArray? = null
         try {
-            val authHashB64 = AuthHash.toBase64(AuthHash.of(verifier))
+            salt = AuthHash.fromBase64(info.saltB64)
+            derived = Argon2Kdf.derive(password, salt, info.params)
+            val split = Argon2Kdf.split(derived)
+            kek = split.first
+            verifier = split.second
+            digest = AuthHash.of(verifier)
+            val authHashB64 = AuthHash.toBase64(digest)
 
             onPhase(AuthPhase.NETWORK)
             val login = api.login(username, authHashB64, storage.deviceIdentifier, storage.deviceName())
+            wrappedBlob = AuthHash.fromBase64(login.wrappedVaultKeyB64)
+            // Unwrap BEFORE persisting: a failed unlock never stores state.
+            val vaultKey = VaultKey.unwrap(wrappedBlob, kek)
             saveSession(base, username, login)
-            VaultKey.unwrap(AuthHash.fromBase64(login.wrappedVaultKeyB64), kek)
+            vaultKey
         } finally {
-            kek.fill(0)
-            verifier.fill(0)
+            salt?.fill(0)
+            derived?.fill(0)
+            kek?.fill(0)
+            verifier?.fill(0)
+            digest?.fill(0)
+            wrappedBlob?.fill(0)
         }
     }
 
@@ -142,7 +173,15 @@ class AuthRepository(
         storage.expiresAt = login.expiresAt
     }
 
-    private fun normalizeUrl(url: String): String = url.trim().trimEnd('/')
+    private fun normalizeUrl(url: String): String {
+        val trimmed = url.trim().trimEnd('/')
+        if (trimmed.isEmpty() ||
+            !(trimmed.startsWith("http://") || trimmed.startsWith("https://"))
+        ) {
+            throw IllegalArgumentException("Server URL must start with http:// or https://.")
+        }
+        return trimmed
+    }
 
     companion object {
         /** Default homelab server hint (spec environment). */

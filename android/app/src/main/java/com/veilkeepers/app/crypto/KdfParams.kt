@@ -22,6 +22,11 @@ data class KdfParams(
         require(m > 0) { "kdf_params.m must be a positive integer" }
         require(t > 0) { "kdf_params.t must be a positive integer" }
         require(p > 0) { "kdf_params.p must be a positive integer" }
+        // DoS clamps for SERVER-supplied params (login flow): an attacker or
+        // a MITM must not be able to force multi-GiB / hour-long derivations.
+        require(m <= MAX_M_KIB) { "kdf_params.m exceeds the ${MAX_M_KIB} KiB ceiling" }
+        require(t <= MAX_T) { "kdf_params.t exceeds the $MAX_T ceiling" }
+        require(p <= MAX_P) { "kdf_params.p exceeds the $MAX_P ceiling" }
     }
 
     /**
@@ -46,7 +51,15 @@ data class KdfParams(
         /** Frozen production parameters (spec-1.md §A.1). */
         val SPEC = KdfParams(m = 65536, t = 3, p = 4)
 
-        /** Parses `{"m":..,"t":..,"p":..}`; rejects missing/invalid fields. */
+        /** DoS ceilings for server-supplied params: 1 GiB memory, t/p ≤ 16. */
+        const val MAX_M_KIB = 1_048_576
+        const val MAX_T = 16
+        const val MAX_P = 16
+
+        /**
+         * Parses `{"m":..,"t":..,"p":..}`; rejects missing/invalid fields and
+         * values above the DoS ceilings (throws IllegalArgumentException).
+         */
         fun parseFrom(json: String): KdfParams {
             val obj = JSONObject(json)
             return KdfParams(

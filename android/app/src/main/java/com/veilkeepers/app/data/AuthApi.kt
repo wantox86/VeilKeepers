@@ -85,11 +85,19 @@ class HttpAuthApi(private val client: ApiClient) : AuthApi {
     override suspend fun getKdf(username: String): KdfInfo = withContext(Dispatchers.IO) {
         val json = client.getJson("/api/v1/auth/kdf/" + encodeSegment(username))
         val params = json.optJSONObject("kdf_params")
-            ?: throw ApiError.Internal
-        KdfInfo(
-            saltB64 = json.optString("kdf_salt", ""),
-            params = KdfParams.parseFrom(params.toString()),
-        )
+            ?: throw ApiError.InvalidInput
+        try {
+            KdfInfo(
+                saltB64 = json.optString("kdf_salt", ""),
+                // parseFrom enforces the DoS ceilings (KdfParams.MAX_*); a
+                // MITM'd absurd value is rejected as invalid input, never derived.
+                params = KdfParams.parseFrom(params.toString()),
+            )
+        } catch (e: IllegalArgumentException) {
+            throw ApiError.InvalidInput
+        } catch (e: org.json.JSONException) {
+            throw ApiError.InvalidInput
+        }
     }
 
     override suspend fun register(
@@ -117,11 +125,17 @@ class HttpAuthApi(private val client: ApiClient) : AuthApi {
             "/api/v1/auth/login",
             AuthPayloads.loginBody(username, authHashB64, deviceIdentifier, deviceName),
         )
-        LoginResult(
+        val result = LoginResult(
             sessionToken = json.optString("session_token", ""),
             wrappedVaultKeyB64 = json.optString("wrapped_vault_key", ""),
             expiresAt = json.optString("expires_at", ""),
         )
+        // A success body missing either field is a broken/tampered server —
+        // never persist or unwrap partial state.
+        if (result.sessionToken.isEmpty() || result.wrappedVaultKeyB64.isEmpty()) {
+            throw ApiError.Internal
+        }
+        result
     }
 
     override suspend fun logout(bearerToken: String) {

@@ -199,6 +199,8 @@ class AuthFlowsTest {
             ApiError.InvalidInput,
             ApiError.NotFound,
             ApiError.Internal,
+            ApiError.SessionExpired,
+            ApiError.ServerUnavailable,
             ApiError.Network(null),
         ).map { errorUiMessage(it) }
 
@@ -217,7 +219,7 @@ class AuthFlowsTest {
     }
 
     @Test
-    fun apiErrorFromCodeMapsAllSevenBackendCodes() {
+    fun apiErrorFromCodeMapsAllBackendCodes() {
         assertEquals(ApiError.InvalidCredentials, ApiError.fromCode("invalid_credentials"))
         assertEquals(ApiError.UsernameTaken, ApiError.fromCode("username_taken"))
         assertEquals(ApiError.RateLimited, ApiError.fromCode("rate_limited"))
@@ -225,6 +227,23 @@ class AuthFlowsTest {
         assertEquals(ApiError.InvalidInput, ApiError.fromCode("invalid_input"))
         assertEquals(ApiError.NotFound, ApiError.fromCode("not_found"))
         assertEquals(ApiError.Internal, ApiError.fromCode("internal_error"))
+        // Session middleware codes (backend/internal/auth/middleware.go).
+        assertEquals(ApiError.SessionExpired, ApiError.fromCode("invalid_token"))
+        assertEquals(ApiError.ServerUnavailable, ApiError.fromCode("service_unavailable"))
         assertEquals(ApiError.Internal, ApiError.fromCode("mystery_code"))
+    }
+
+    @Test
+    fun malformedServerUrlIsRejectedWithClearMessage() = runBlocking {
+        for (badUrl in listOf("ftp://server:18080", "server:18080", "   ", "")) {
+            try {
+                repository.login(badUrl, "alice", "pw".toCharArray())
+                fail("expected rejection of URL '$badUrl'")
+            } catch (expected: IllegalArgumentException) {
+                assertTrue(
+                    errorUiMessage(expected).startsWith("Server URL must start with"),
+                )
+            }
+        }
     }
 }

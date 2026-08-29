@@ -3,6 +3,7 @@ package com.veilkeepers.app.data
 import android.content.Context
 import android.content.SharedPreferences
 import android.os.Build
+import android.util.Log
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 import java.util.UUID
@@ -29,8 +30,8 @@ interface SessionStorage {
     var expiresAt: String
 
     /**
-     * Stable random UUID created once at first access (spec-1.md §B.12).
-     * Survives [clear] so the same device keeps the same identity.
+     * Stable random UUID generated once (spec-1.md §B.12). Survives [clear]
+     * so the same device keeps the same identity.
      */
     val deviceIdentifier: String
 
@@ -47,78 +48,118 @@ interface SessionStorage {
 /**
  * [SessionStorage] over androidx EncryptedSharedPreferences.
  *
- * Initialization is wrapped in try/catch because Android Keystore can be in
- * a broken state (factory reset bugs, OEM quirks); in that edge case the
- * store degrades to plain SharedPreferences so the app stays usable. The
- * device never holds the VK at rest either way, and logout [clear]s the
- * session immediately.
+ * Degradation path (docs/security/key-architecture.md §8): if the Android
+ * Keystore is corrupt/unavailable, EncryptedSharedPreferences cannot be
+ * created. Session material is then kept MEMORY-ONLY for the lifetime of
+ * this instance — it is never written to plain SharedPreferences — so the
+ * user simply has to log in again after process death. The decision is
+ * sticky per instance and logged once, secret-free.
  */
 class EncryptedSessionStore(context: Context) : SessionStorage {
 
-    private val prefs: SharedPreferences = createPrefs(context)
+    /** Sticky per-instance degradation flag decided once in the constructor. */
+    private val fallback: Boolean
+    private val prefs: SharedPreferences?
+
+    /** Memory-only session material used when [fallback] is true. */
+    private val memory = HashMap<String, String>()
+
+    private val storedDeviceIdentifier: String
+
+    init {
+        var created: SharedPreferences? = null
+        try {
+            val masterKey = MasterKey.Builder(context)
+                .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
+                .build()
+            created = EncryptedSharedPreferences.create(
+                context,
+                FILE_NAME,
+                masterKey,
+                EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
+                EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM,
+            )
+        } catch (e: Exception) {
+            // ONE secret-free degradation message; no values are logged.
+            Log.w(
+                TAG,
+                "Encrypted session store unavailable (Keystore failure); " +
+                    "session material kept in memory only until process death.",
+            )
+        }
+        prefs = created
+        fallback = created == null
+
+        // device_identifier (spec-1.md §B.12): generated and persisted exactly
+        // once, synchronously committed — no racy lazy write. In fallback mode
+        // the ID is stable for the process lifetime (never written to disk).
+        storedDeviceIdentifier = if (fallback) {
+            UUID.randomUUID().toString()
+        } else {
+            val existing = created.getString(KEY_DEVICE_IDENTIFIER, null)
+            if (existing != null) {
+                existing
+            } else {
+                val fresh = UUID.randomUUID().toString()
+                created.edit().putString(KEY_DEVICE_IDENTIFIER, fresh).commit()
+                fresh
+            }
+        }
+    }
 
     override var serverUrl: String
-        get() = prefs.getString(KEY_SERVER_URL, "") ?: ""
-        set(value) = prefs.editValue { putString(KEY_SERVER_URL, value) }
+        get() = read(KEY_SERVER_URL)
+        set(value) = write(KEY_SERVER_URL, value)
 
     override var username: String
-        get() = prefs.getString(KEY_USERNAME, "") ?: ""
-        set(value) = prefs.editValue { putString(KEY_USERNAME, value) }
+        get() = read(KEY_USERNAME)
+        set(value) = write(KEY_USERNAME, value)
 
     override var sessionToken: String
-        get() = prefs.getString(KEY_SESSION_TOKEN, "") ?: ""
-        set(value) = prefs.editValue { putString(KEY_SESSION_TOKEN, value) }
+        get() = read(KEY_SESSION_TOKEN)
+        set(value) = write(KEY_SESSION_TOKEN, value)
 
     override var wrappedVaultKeyB64: String
-        get() = prefs.getString(KEY_WRAPPED_VAULT_KEY, "") ?: ""
-        set(value) = prefs.editValue { putString(KEY_WRAPPED_VAULT_KEY, value) }
+        get() = read(KEY_WRAPPED_VAULT_KEY)
+        set(value) = write(KEY_WRAPPED_VAULT_KEY, value)
 
     override var expiresAt: String
-        get() = prefs.getString(KEY_EXPIRES_AT, "") ?: ""
-        set(value) = prefs.editValue { putString(KEY_EXPIRES_AT, value) }
+        get() = read(KEY_EXPIRES_AT)
+        set(value) = write(KEY_EXPIRES_AT, value)
 
     override val deviceIdentifier: String
-        get() {
-            prefs.getString(KEY_DEVICE_IDENTIFIER, null)?.let { return it }
-            val fresh = UUID.randomUUID().toString()
-            prefs.editValue { putString(KEY_DEVICE_IDENTIFIER, fresh) }
-            return fresh
-        }
+        get() = storedDeviceIdentifier
 
     override fun deviceName(): String = Build.MODEL
 
     override fun clear() {
-        prefs.editValue {
-            remove(KEY_USERNAME)
-            remove(KEY_SESSION_TOKEN)
-            remove(KEY_WRAPPED_VAULT_KEY)
-            remove(KEY_EXPIRES_AT)
+        if (fallback) {
+            memory.clear()
+            return
         }
+        // commit() — logout must durably wipe credentials before returning.
+        prefs!!.edit()
+            .remove(KEY_USERNAME)
+            .remove(KEY_SESSION_TOKEN)
+            .remove(KEY_WRAPPED_VAULT_KEY)
+            .remove(KEY_EXPIRES_AT)
+            .commit()
     }
 
-    private fun createPrefs(context: Context): SharedPreferences = try {
-        val masterKey = MasterKey.Builder(context)
-            .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
-            .build()
-        EncryptedSharedPreferences.create(
-            context,
-            FILE_NAME,
-            masterKey,
-            EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
-            EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM,
-        )
-    } catch (e: Exception) {
-        // Keystore unavailable/corrupt: graceful fallback (see class doc).
-        context.getSharedPreferences(FALLBACK_FILE_NAME, Context.MODE_PRIVATE)
-    }
+    private fun read(key: String): String =
+        if (fallback) memory[key] ?: "" else prefs!!.getString(key, "") ?: ""
 
-    private inline fun SharedPreferences.editValue(block: SharedPreferences.Editor.() -> Unit) {
-        edit().apply(block).apply()
+    private fun write(key: String, value: String) {
+        if (fallback) {
+            memory[key] = value
+            return
+        }
+        prefs!!.edit().putString(key, value).apply()
     }
 
     companion object {
+        private const val TAG = "VeilSessionStore"
         private const val FILE_NAME = "veilkeepers_session"
-        private const val FALLBACK_FILE_NAME = "veilkeepers_session_fallback"
         private const val KEY_SERVER_URL = "server_url"
         private const val KEY_USERNAME = "username"
         private const val KEY_SESSION_TOKEN = "session_token"

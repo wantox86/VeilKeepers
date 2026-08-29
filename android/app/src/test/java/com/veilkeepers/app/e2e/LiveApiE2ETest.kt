@@ -21,9 +21,12 @@ import java.util.UUID
  * SKIPPED unless VK_E2E_BASE_URL is set, e.g.:
  *   VK_E2E_BASE_URL=http://192.168.50.131:18080 ./gradlew :app:testDebugUnitTest
  *
- * One run performs exactly 4 auth calls (register, kdf, login, logout) —
- * comfortably inside the 10 req/min per-IP budget — plus a /health sanity
- * GET. No retry loops: a rate-limited run is a failed run.
+ * One run performs 5 rate-limited auth calls (register, kdf, login, logout,
+ * revoked-token logout recheck) — comfortably inside the 10 req/min per-IP
+ * budget — plus a /health sanity GET. No retry loops: a rate-limited run is
+ * a failed run.
+ * Note: ephemeral vk<timestamp> accounts accumulate on the live server —
+ * accepted, there is no account-cleanup endpoint yet.
  */
 class LiveApiE2ETest {
 

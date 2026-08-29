@@ -11,6 +11,14 @@ sealed class ApiError(message: String, cause: Throwable? = null) : Exception(mes
     /** 401 invalid_credentials — single generic login failure. */
     object InvalidCredentials : ApiError("Username or password is incorrect.")
 
+    /** 401 invalid_token — session middleware: expired or revoked bearer token. */
+    object SessionExpired :
+        ApiError("Your session has expired or was revoked. Please log in again.")
+
+    /** 503 service_unavailable — server is starting up or degraded. */
+    object ServerUnavailable :
+        ApiError("The server is unavailable right now. Please try again later.")
+
     /** 409 username_taken. */
     object UsernameTaken : ApiError("That username is not available.")
 
@@ -44,6 +52,8 @@ sealed class ApiError(message: String, cause: Throwable? = null) : Exception(mes
             "invalid_input" -> InvalidInput
             "not_found" -> NotFound
             "internal_error" -> Internal
+            "invalid_token" -> SessionExpired
+            "service_unavailable" -> ServerUnavailable
             else -> Internal
         }
     }

@@ -7,5 +7,5 @@ useDefault = true
 description = "Placeholder environment file and non-secret data fixtures"
 paths = [
   '''(^|/)\.env\.example$''',
-  '''(^|/)data/''',
+  '''(^|/)data/.*\.gitkeep$''',
 ]

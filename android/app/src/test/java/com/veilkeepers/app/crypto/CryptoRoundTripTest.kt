@@ -102,6 +102,33 @@ class CryptoRoundTripTest {
     }
 
     @Test
+    fun tamperedBlobFailsAuthentication() {
+        val vk = VaultKey.generate()
+        val kek = ByteArray(32) { 5 }
+        val blob = VaultKey.wrap(vk, kek)
+
+        // Flip one bit inside the ciphertext portion — GCM tag must reject it.
+        val tamperedCiphertext = blob.copyOf().also {
+            it[VaultKey.NONCE_BYTES + 3] = (it[VaultKey.NONCE_BYTES + 3] + 1).toByte()
+        }
+        try {
+            VaultKey.unwrap(tamperedCiphertext, kek)
+            fail("bit-flipped ciphertext must fail GCM authentication")
+        } catch (expected: GeneralSecurityException) {
+            // expected
+        }
+
+        // Flip one bit inside the nonce — GCM tag must reject it too.
+        val tamperedNonce = blob.copyOf().also { it[0] = (it[0] + 1).toByte() }
+        try {
+            VaultKey.unwrap(tamperedNonce, kek)
+            fail("bit-flipped nonce must fail GCM authentication")
+        } catch (expected: GeneralSecurityException) {
+            // expected
+        }
+    }
+
+    @Test
     fun payloadSizesFitBackendLimits() {
         // backend/internal/auth/service.go: salt ≥16 & ≤32, wrapped ≤128.
         val salt = Argon2Kdf.randomSalt()
