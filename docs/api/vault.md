@@ -14,7 +14,9 @@ Frozen endpoint contract for the vault surface. All routes live under
 - **Errors** use the uniform envelope
   `{"error": "<code>", "message": "<generic>"}`. Codes used by these
   routes: `invalid_input` (400), `invalid_token` (401), `not_found` (404),
-  `internal_error` (500).
+  `internal_error` (500), `service_unavailable` (503, **retryable** —
+  returned by the session middleware when the session lookup fails, e.g.
+  during a store outage).
 - **Ownership hiding**: any row belonging to another user is reported
   exactly as a missing one — `404 not_found` on handlers,
   `{"error":"not_found","message":"resource not found"}`. Clients can
@@ -29,13 +31,24 @@ Frozen endpoint contract for the vault surface. All routes live under
 | --- | --- |
 | Category create/update request body | ≤ 4 KiB (`maxCategoryBodyBytes`) |
 | `encrypted_name` after base64 decode | 1..255 bytes |
-| Item create/update request body | ≤ 1 MiB (`maxVaultItemBodyBytes`) |
-| `encrypted_payload` after base64 decode | 1..1 MiB |
+| `encrypted_payload` after base64 decode | 1..1 MiB (`maxVaultItemPayloadBytes`) |
+| Item create/update raw request body | ≤ 1 MiB × 4/3 + 4 KiB (`maxVaultItemRawBodyBytes`) |
 | Category list page (`maxCategoriesPerList`) | 200 + `has_more` |
 | Item list page (`maxItemsPerList`) | 500 + `has_more` |
 
+The item contract is on the **decoded** payload: `encrypted_payload` may
+hold up to 1 MiB after base64 decode. The raw-body limit only exists to
+accommodate the ~4/3 base64 inflation plus the JSON envelope; both limits
+are enforced (the raw one via `MaxBytesReader`, the decoded one after
+base64 decode).
+
 List endpoints fetch `limit + 1` rows and expose the overflow as
 `"has_more": true` while returning at most `limit` entries.
+
+**Sprint 4 does NOT provide any pagination mechanism.** When a response
+carries `"has_more": true`, clients must treat it as a warning only —
+there is no cursor or offset to fetch the remaining rows (project
+decision: cursor pagination was rejected/deferred).
 
 Rate limiting is **not** applied to vault routes in Sprint 4 (deferred;
 auth routes remain rate-limited). Attachments are out of scope until
@@ -140,7 +153,8 @@ Response `200`:
 
 ### POST /api/v1/vault/items
 
-Request body (≤ 1 MiB):
+Request body (`encrypted_payload` ≤ 1 MiB **after base64 decode**; the
+raw body may be larger, up to `maxVaultItemRawBodyBytes`):
 
 ```json
 {

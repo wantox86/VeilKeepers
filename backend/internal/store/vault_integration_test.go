@@ -117,6 +117,14 @@ func TestVaultStoreIntegration(t *testing.T) {
 		t.Fatalf("renamed category = %q", categories[0].EncryptedName)
 	}
 
+	// No-op update: re-sending the identical name must succeed (MySQL's
+	// RowsAffected counts changed rows, not matched ones, so the store
+	// disambiguates with an existence check instead of reporting
+	// not-found on client retries).
+	if err := s.UpdateCategory(ctx, aliceID, cat.ID, []byte("alice-renamed")); err != nil {
+		t.Fatalf("no-op UpdateCategory: %v", err)
+	}
+
 	// --- Item CRUD with category ---
 	item, err := s.CreateItem(ctx, aliceID, &cat.ID, []byte("alice-payload"))
 	if err != nil {
@@ -141,6 +149,15 @@ func TestVaultStoreIntegration(t *testing.T) {
 	}
 	if categories[0].ItemCount != 1 {
 		t.Fatalf("item_count = %d, want 1", categories[0].ItemCount)
+	}
+
+	// No-op update: re-sending the item's identical category and payload
+	// must succeed rather than surface as ErrNotFound.
+	if err := s.UpdateItem(ctx, aliceID, item.ID, &cat.ID, []byte("alice-payload")); err != nil {
+		t.Fatalf("no-op UpdateItem: %v", err)
+	}
+	if got, err = s.GetItem(ctx, aliceID, item.ID); err != nil || string(got.EncryptedPayload) != "alice-payload" {
+		t.Fatalf("GetItem after no-op update: item = %+v, err = %v", got, err)
 	}
 
 	// --- Ownership isolation: foreign rows are ErrNotFound ---

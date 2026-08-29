@@ -14,10 +14,15 @@ import (
 	"github.com/wantox86/VeilKeepers/backend/internal/store"
 )
 
-// maxVaultItemBodyBytes caps request bodies on the vault item routes at
-// 1 MiB; it bounds both the raw base64 body (MaxBytesReader) and the
-// decoded encrypted payload.
-const maxVaultItemBodyBytes = 1 << 20
+// maxVaultItemPayloadBytes caps the DECODED encrypted payload on the
+// vault item routes at 1 MiB.
+const maxVaultItemPayloadBytes = 1 << 20
+
+// maxVaultItemRawBodyBytes caps the raw request body (MaxBytesReader) on
+// the vault item routes: a full 1 MiB payload inflates to roughly 4/3 of
+// its size once base64-encoded, so the raw limit must sit above the
+// decoded limit for the 1 MiB contract to be reachable.
+const maxVaultItemRawBodyBytes = maxVaultItemPayloadBytes/3*4 + 4<<10
 
 // maxItemsPerList bounds a single item-list response page; the store is
 // asked for one extra row to detect has_more.
@@ -136,7 +141,7 @@ func (v *vaultAPI) handleCreate(w http.ResponseWriter, r *http.Request) {
 	outcome := msgVaultItemCreateOutcome
 	userID := auth.UserID(r.Context())
 
-	r.Body = http.MaxBytesReader(w, r.Body, maxVaultItemBodyBytes)
+	r.Body = http.MaxBytesReader(w, r.Body, maxVaultItemRawBodyBytes)
 	var req itemRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, codeInvalidInput, msgInvalidInput)
@@ -144,7 +149,7 @@ func (v *vaultAPI) handleCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	payload, err := base64.StdEncoding.DecodeString(req.EncryptedPayload)
-	if err != nil || len(payload) == 0 || len(payload) > maxVaultItemBodyBytes {
+	if err != nil || len(payload) == 0 || len(payload) > maxVaultItemPayloadBytes {
 		writeError(w, http.StatusBadRequest, codeInvalidInput, msgInvalidInput)
 		slog.Info(outcome, "code", codeInvalidInput, "user_id", userID)
 		return
@@ -221,7 +226,7 @@ func (v *vaultAPI) handleUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	r.Body = http.MaxBytesReader(w, r.Body, maxVaultItemBodyBytes)
+	r.Body = http.MaxBytesReader(w, r.Body, maxVaultItemRawBodyBytes)
 	var req itemRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, codeInvalidInput, msgInvalidInput)
@@ -229,7 +234,7 @@ func (v *vaultAPI) handleUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	payload, err := base64.StdEncoding.DecodeString(req.EncryptedPayload)
-	if err != nil || len(payload) == 0 || len(payload) > maxVaultItemBodyBytes {
+	if err != nil || len(payload) == 0 || len(payload) > maxVaultItemPayloadBytes {
 		writeError(w, http.StatusBadRequest, codeInvalidInput, msgInvalidInput)
 		slog.Info(outcome, "code", codeInvalidInput, "user_id", userID)
 		return

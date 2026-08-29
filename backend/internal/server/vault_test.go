@@ -162,7 +162,7 @@ func TestVaultItemInvalidInputs(t *testing.T) {
 		{"create malformed json", http.MethodPost, "/api/v1/vault/items", []byte("{not json")},
 		{"create zero category_id", http.MethodPost, "/api/v1/vault/items", []byte(`{"category_id":0,"encrypted_payload":"` + base64.StdEncoding.EncodeToString([]byte("x")) + `"}`)},
 		{"create negative category_id", http.MethodPost, "/api/v1/vault/items", []byte(`{"category_id":-1,"encrypted_payload":"` + base64.StdEncoding.EncodeToString([]byte("x")) + `"}`)},
-		{"create oversized body", http.MethodPost, "/api/v1/vault/items", itemBody(nil, bytes.Repeat([]byte{1}, maxVaultItemBodyBytes))},
+		{"create oversized payload", http.MethodPost, "/api/v1/vault/items", itemBody(nil, bytes.Repeat([]byte{1}, maxVaultItemPayloadBytes+1))},
 		{"get bad id", http.MethodGet, "/api/v1/vault/items/not-a-number", nil},
 		{"update bad id", http.MethodPut, "/api/v1/vault/items/not-a-number", itemBody(nil, []byte("x"))},
 		{"update empty payload", http.MethodPut, itemPath, itemBody(nil, nil)},
@@ -324,6 +324,70 @@ func TestVaultItemListFilter(t *testing.T) {
 	resp = listItems(t, e, token, "category_id=999999999")
 	if len(resp.Items) != 0 {
 		t.Fatalf("unknown category filter = %d items, want 0", len(resp.Items))
+	}
+}
+
+// TestVaultItemUpdateNoOpSucceeds asserts a PUT whose body matches the
+// stored values (a client retry) returns 200 rather than 404: MySQL's
+// RowsAffected counts changed rows, not matched ones, so the store must
+// treat an identical update on an existing row as a successful no-op.
+func TestVaultItemUpdateNoOpSucceeds(t *testing.T) {
+	e := newTestEnv(t, true, nil)
+	token := e.loginToken("alice")
+
+	cat := createCategory(t, e, token, []byte("enc"))
+	item := createItem(t, e, token, &cat.ID, []byte("payload"))
+	itemPath := "/api/v1/vault/items/" + strconv.FormatUint(item.ID, 10)
+
+	for i := 0; i < 2; i++ {
+		rec := e.do(http.MethodPut, itemPath, token, itemBody(&cat.ID, []byte("payload")))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("identical update #%d status = %d, want %d; body = %s", i+1, rec.Code, http.StatusOK, rec.Body.String())
+		}
+	}
+}
+
+// TestVaultItemPayloadBoundaries asserts the decoded-payload limit is
+// exactly 1 MiB: a full-megabyte payload is accepted on create and
+// update, while one extra decoded byte is rejected as invalid_input.
+func TestVaultItemPayloadBoundaries(t *testing.T) {
+	e := newTestEnv(t, true, nil)
+	token := e.loginToken("alice")
+
+	full := bytes.Repeat([]byte{0x5A}, maxVaultItemPayloadBytes)
+
+	// POST with exactly 1 MiB decoded -> 201.
+	item := createItem(t, e, token, nil, full)
+	if item.ID == 0 {
+		t.Fatal("1 MiB payload create rejected")
+	}
+
+	// PUT with exactly 1 MiB decoded -> 200 (sent twice: the identical
+	// retry is a no-op update and must also succeed).
+	itemPath := "/api/v1/vault/items/" + strconv.FormatUint(item.ID, 10)
+	for i := 0; i < 2; i++ {
+		rec := e.do(http.MethodPut, itemPath, token, itemBody(nil, full))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("1 MiB update #%d status = %d, want %d; body = %s", i+1, rec.Code, http.StatusOK, rec.Body.String())
+		}
+	}
+
+	// One decoded byte over the limit -> 400 invalid_input on both verbs.
+	over := bytes.Repeat([]byte{0x5A}, maxVaultItemPayloadBytes+1)
+	for _, tc := range []struct {
+		method string
+		path   string
+	}{
+		{http.MethodPost, "/api/v1/vault/items"},
+		{http.MethodPut, itemPath},
+	} {
+		rec := e.do(tc.method, tc.path, token, itemBody(nil, over))
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("%s over-limit status = %d, want %d; body = %s", tc.method, rec.Code, http.StatusBadRequest, rec.Body.String())
+		}
+		if code := errorCode(t, rec); code != codeInvalidInput {
+			t.Fatalf("error = %q, want %q", code, codeInvalidInput)
+		}
 	}
 }
 

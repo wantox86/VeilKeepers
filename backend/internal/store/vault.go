@@ -106,7 +106,10 @@ func (s *Store) ListCategories(ctx context.Context, userID uint64, limit int) ([
 }
 
 // UpdateCategory replaces a category's encrypted name, scoped to userID.
-// A row owned by another user (or missing) yields ErrNotFound.
+// A row owned by another user (or missing) yields ErrNotFound. A no-op
+// update (identical name, e.g. a client retry) succeeds: MySQL's
+// RowsAffected counts CHANGED rows, not matched ones, so a zero count is
+// disambiguated by an existence check instead of assuming not-found.
 func (s *Store) UpdateCategory(ctx context.Context, userID, categoryID uint64, encryptedName []byte) error {
 	res, err := s.db.ExecContext(ctx,
 		`UPDATE categories SET encrypted_name = ? WHERE id = ? AND user_id = ?`,
@@ -120,9 +123,23 @@ func (s *Store) UpdateCategory(ctx context.Context, userID, categoryID uint64, e
 		return err
 	}
 	if n == 0 {
-		return ErrNotFound
+		return existsOrNotFound(ctx, s.db,
+			`SELECT 1 FROM categories WHERE id = ? AND user_id = ?`,
+			categoryID, userID)
 	}
 	return nil
+}
+
+// existsOrNotFound distinguishes a no-op UPDATE (row exists but nothing
+// changed) from a missing/foreign row: nil when the row exists,
+// ErrNotFound when it does not; any other error is propagated.
+func existsOrNotFound(ctx context.Context, q execQuerier, query string, id, userID uint64) error {
+	var one int
+	err := q.QueryRowContext(ctx, query, id, userID).Scan(&one)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ErrNotFound
+	}
+	return err
 }
 
 // DeleteCategoryAndReassign atomically moves the user's items out of the
@@ -202,10 +219,13 @@ func (s *Store) CreateItem(ctx context.Context, userID uint64, categoryID *uint6
 
 // requireOwnedCategory returns ErrNotFound unless categoryID belongs to
 // userID, keeping foreign categories indistinguishable from missing ones.
+// The FOR UPDATE lock is held (callers always run inside a transaction)
+// so a concurrent category delete cannot slip in between this check and
+// the dependent INSERT/UPDATE and surface as a foreign-key violation.
 func requireOwnedCategory(ctx context.Context, q execQuerier, userID, categoryID uint64) error {
 	var one int
 	err := q.QueryRowContext(ctx,
-		`SELECT 1 FROM categories WHERE id = ? AND user_id = ?`,
+		`SELECT 1 FROM categories WHERE id = ? AND user_id = ? FOR UPDATE`,
 		categoryID, userID,
 	).Scan(&one)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -289,7 +309,10 @@ func (s *Store) UpdateItem(ctx context.Context, userID, itemID uint64, categoryI
 	return tx.Commit()
 }
 
-// updateItemRow performs the conditional vault_items UPDATE.
+// updateItemRow performs the conditional vault_items UPDATE. A zero
+// RowsAffected is a no-op update (identical values) when the row exists
+// — MySQL counts CHANGED rows, not matched ones — so the row is
+// re-checked before reporting ErrNotFound.
 func (s *Store) updateItemRow(ctx context.Context, q execQuerier, userID, itemID uint64, categoryID *uint64, payload []byte) error {
 	res, err := q.ExecContext(ctx,
 		`UPDATE vault_items SET category_id = ?, encrypted_payload = ? WHERE id = ? AND user_id = ?`,
@@ -303,7 +326,9 @@ func (s *Store) updateItemRow(ctx context.Context, q execQuerier, userID, itemID
 		return err
 	}
 	if n == 0 {
-		return ErrNotFound
+		return existsOrNotFound(ctx, q,
+			`SELECT 1 FROM vault_items WHERE id = ? AND user_id = ?`,
+			itemID, userID)
 	}
 	return nil
 }

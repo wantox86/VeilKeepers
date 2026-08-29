@@ -108,6 +108,26 @@ func TestCategoryCRUD(t *testing.T) {
 	}
 }
 
+// TestCategoryUpdateNoOpSucceeds asserts a PUT that re-sends the
+// current encrypted name (a client retry) returns 200 rather than 404:
+// MySQL's RowsAffected counts changed rows, not matched ones, so the
+// store must treat an identical update on an existing row as a
+// successful no-op.
+func TestCategoryUpdateNoOpSucceeds(t *testing.T) {
+	e := newTestEnv(t, true, nil)
+	token := e.loginToken("alice")
+
+	cat := createCategory(t, e, token, []byte("enc-name"))
+	catPath := "/api/v1/categories/" + strconv.FormatUint(cat.ID, 10)
+
+	for i := 0; i < 2; i++ {
+		rec := e.do(http.MethodPut, catPath, token, categoryBody([]byte("enc-name")))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("identical update #%d status = %d, want %d; body = %s", i+1, rec.Code, http.StatusOK, rec.Body.String())
+		}
+	}
+}
+
 // TestCategoryInvalidInputs asserts malformed requests map to 400
 // invalid_input.
 func TestCategoryInvalidInputs(t *testing.T) {
