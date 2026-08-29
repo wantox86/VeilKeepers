@@ -10,6 +10,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 /** Number of most-recently-updated items shown on the home screen. */
 const val RECENT_LIMIT = 5
@@ -82,6 +84,13 @@ class VaultViewModel(private val repository: VaultRepository) : ViewModel() {
     private val _uiState = MutableStateFlow<VaultUiState>(VaultUiState.Loading)
     val uiState: StateFlow<VaultUiState> = _uiState.asStateFlow()
 
+    /**
+     * Serializes mutations: the read-mutate-write inside [withLoaded] runs
+     * under this lock and re-reads the CURRENT state inside it, so overlapping
+     * mutations can no longer snapshot the same `previous` and lose updates.
+     */
+    private val mutationLock = Mutex()
+
     init {
         reload()
     }
@@ -95,7 +104,7 @@ class VaultViewModel(private val repository: VaultRepository) : ViewModel() {
             try {
                 _uiState.value = loadedFrom(repository.refresh())
             } catch (error: Throwable) {
-                _uiState.value = vaultUiError(error, previous)
+                _uiState.value = failed(error, previous)
             }
         }
     }
@@ -136,7 +145,7 @@ class VaultViewModel(private val repository: VaultRepository) : ViewModel() {
                 .withItems(listOf(item) + prev.items)
         } else {
             val old = prev.items.firstOrNull { it.id == itemId }
-            val item = repository.updateItem(itemId, categoryId, title, notes, fields)
+            val item = repository.updateItem(itemId, categoryId, title, notes, fields, old)
             prev
                 .copy(
                     categories = bumpCount(
@@ -188,15 +197,33 @@ class VaultViewModel(private val repository: VaultRepository) : ViewModel() {
     }
 
     private fun withLoaded(action: suspend (VaultUiState.Loaded) -> VaultUiState.Loaded) {
-        val previous = currentLoaded() ?: return
         viewModelScope.launch {
-            _uiState.value = VaultUiState.Saving(previous)
-            try {
-                _uiState.value = action(previous)
-            } catch (error: Throwable) {
-                _uiState.value = vaultUiError(error, previous)
+            // Serialize: snapshot the state INSIDE the lock so concurrent
+            // mutations never base their write on the same stale `previous`.
+            mutationLock.withLock {
+                val previous = currentLoaded() ?: return@launch
+                _uiState.value = VaultUiState.Saving(previous)
+                try {
+                    _uiState.value = action(previous)
+                } catch (error: Throwable) {
+                    _uiState.value = failed(error, previous)
+                }
             }
         }
+    }
+
+    /**
+     * Maps a failure to the next state and, on the terminal SessionExpired
+     * path, zeroizes the VK BEFORE routing back to login — matching the
+     * lock & sign out semantics (the 401 path otherwise leaked the plaintext
+     * VK in memory).
+     */
+    private fun failed(error: Throwable, previous: VaultUiState.Loaded?): VaultUiState {
+        val next = vaultUiError(error, previous)
+        if (next is VaultUiState.SessionExpired) {
+            repository.zeroizeVaultKey()
+        }
+        return next
     }
 
     private fun loadedFrom(snapshot: VaultSnapshot): VaultUiState.Loaded = VaultUiState.Loaded(

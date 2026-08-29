@@ -98,16 +98,33 @@ class VaultRepository(
         )
     }
 
-    /** PUTs the replacement, then does a single GET to refresh the item. */
+    /**
+     * PUTs the replacement and reconstructs the item LOCALLY from the inputs
+     * plus the previous entry's timestamps — mirroring the createItem pattern.
+     * A PUT→GET refresh could fail AFTER the server already committed, which
+     * would falsely report "unchanged"; local reconstruction never lies about
+     * success. The server bumped updated_at, but carrying the prior value
+     * locally is acceptable and self-corrects on the next full refresh.
+     */
     suspend fun updateItem(
         id: Long,
         categoryId: Long?,
         title: String,
         notes: String,
         fields: List<VaultField>,
+        previous: DecryptedItem?,
     ): DecryptedItem {
         api.updateItem(id, categoryId, encryptPayload(title, notes, fields))
-        return decryptItem(api.getItem(id))
+        return DecryptedItem(
+            id = id,
+            categoryId = categoryId,
+            title = title,
+            notes = notes,
+            fields = fields,
+            undecryptable = false,
+            createdAt = previous?.createdAt.orEmpty(),
+            updatedAt = previous?.updatedAt.orEmpty(),
+        )
     }
 
     suspend fun deleteItem(id: Long) {
@@ -115,11 +132,20 @@ class VaultRepository(
     }
 
     /**
+     * Zeroizes the in-memory VK. Idempotent. Called on EVERY terminal path
+     * (lock & sign out AND session-expired) so the plaintext VK never
+     * outlives the session, regardless of how the vault was exited.
+     */
+    fun zeroizeVaultKey() {
+        vaultKey.fill(0)
+    }
+
+    /**
      * Lock & sign out: zeroizes the VK in-place FIRST, then delegates the
      * session revocation/store wipe to [AuthRepository].
      */
     suspend fun lockAndLogout() {
-        vaultKey.fill(0)
+        zeroizeVaultKey()
         authRepository.logout()
     }
 

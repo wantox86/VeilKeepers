@@ -200,12 +200,7 @@ class HttpVaultApi(private val client: ApiClient, private val bearerToken: Strin
 
     override suspend fun listItems(categoryId: Long?): ItemListResult =
         withContext(Dispatchers.IO) {
-            val path = if (categoryId != null) {
-                "/api/v1/vault/items?category_id=$categoryId"
-            } else {
-                "/api/v1/vault/items"
-            }
-            VaultPayloads.parseItemList(client.getJson(path, bearerToken))
+            VaultPayloads.parseItemList(client.getJson(itemsListPath(categoryId), bearerToken))
         }
 
     override suspend fun createItem(categoryId: Long?, encryptedPayloadB64: String): ItemEntry =
@@ -239,5 +234,19 @@ class HttpVaultApi(private val client: ApiClient, private val bearerToken: Strin
         withContext(Dispatchers.IO) {
             VaultPayloads.parseStatusOk(client.deleteJson("/api/v1/vault/items/$id", bearerToken))
         }
+    }
+
+    companion object {
+        /**
+         * GET /api/v1/vault/items request path; a non-null [categoryId]
+         * becomes the contract's `?category_id=` query parameter. Extracted
+         * so the encoding is testable without a live HTTP connection.
+         */
+        fun itemsListPath(categoryId: Long?): String =
+            if (categoryId != null) {
+                "/api/v1/vault/items?category_id=$categoryId"
+            } else {
+                "/api/v1/vault/items"
+            }
     }
 }

@@ -26,6 +26,12 @@ object PayloadCipher {
     /** GCM authentication tag length in bits. */
     private const val TAG_BITS = 128
 
+    /** GCM authentication tag length in bytes (128-bit). */
+    const val TAG_BYTES = TAG_BITS / 8
+
+    /** Bytes every encrypted blob adds over its plaintext (nonce + tag). */
+    const val CIPHER_OVERHEAD_BYTES = NONCE_BYTES + TAG_BYTES
+
     /** Decoded-size ceiling for encrypted category names (backend bound). */
     const val MAX_NAME_BYTES = 255
 
@@ -65,26 +71,33 @@ object PayloadCipher {
 
     /**
      * Encrypts a category [name], enforcing the backend's decoded
-     * 1..255-byte bound BEFORE anything reaches the network.
+     * 1..255-byte bound BEFORE anything reaches the network. The bound
+     * applies to the CIPHERTEXT (nonce + tag included), so the accepted
+     * plaintext maximum is [MAX_NAME_BYTES] − [CIPHER_OVERHEAD_BYTES].
      */
     fun encryptName(name: String, vk: ByteArray): ByteArray {
         val bytes = name.toByteArray(Charsets.UTF_8)
         require(bytes.isNotEmpty()) { "category name must not be empty" }
-        require(bytes.size <= MAX_NAME_BYTES) {
-            "category name exceeds $MAX_NAME_BYTES bytes"
+        require(bytes.size + CIPHER_OVERHEAD_BYTES <= MAX_NAME_BYTES) {
+            "category name is too long: it must fit in " +
+                "${MAX_NAME_BYTES - CIPHER_OVERHEAD_BYTES} bytes before encryption"
         }
         return encrypt(bytes, vk)
     }
 
     /**
      * Encrypts an item [payloadJson], enforcing the backend's decoded
-     * 1..1 MiB bound BEFORE anything reaches the network.
+     * 1..1 MiB bound BEFORE anything reaches the network. The bound applies
+     * to the CIPHERTEXT (nonce + tag included), so the accepted plaintext
+     * maximum is [MAX_PAYLOAD_BYTES] − [CIPHER_OVERHEAD_BYTES] — checking
+     * plaintext alone would fail with a misleading error in that 28-byte gap.
      */
     fun encryptPayload(payloadJson: String, vk: ByteArray): ByteArray {
         val bytes = payloadJson.toByteArray(Charsets.UTF_8)
         require(bytes.isNotEmpty()) { "item payload must not be empty" }
-        require(bytes.size <= MAX_PAYLOAD_BYTES) {
-            "item payload exceeds the ${MAX_PAYLOAD_BYTES}-byte (1 MiB) limit"
+        require(bytes.size + CIPHER_OVERHEAD_BYTES <= MAX_PAYLOAD_BYTES) {
+            "item payload is too large: it must fit in " +
+                "${MAX_PAYLOAD_BYTES - CIPHER_OVERHEAD_BYTES} bytes before encryption"
         }
         return encrypt(bytes, vk)
     }

@@ -28,10 +28,17 @@ sealed class AuthUiState {
      * Vault unlocked; the VK is held in memory ONLY and never persisted.
      * [categorySeedWarning] is a non-fatal notice when the default-category
      * seeding at registration failed (the account itself was created).
+     *
+     * [unlockGeneration] is a monotonic counter bumped on EVERY successful
+     * unlock. The vault UI keys its session-scoped ViewModel on it (never on
+     * secret material) so a re-login after lock/401 always gets a fresh
+     * ViewModel instead of a stale terminal-state one. Defaulted for source
+     * compatibility with existing construction sites.
      */
     data class Success(
         val vaultKey: ByteArray,
         val categorySeedWarning: String? = null,
+        val unlockGeneration: Long = 0,
     ) : AuthUiState()
 }
 
@@ -72,6 +79,9 @@ class AuthViewModel(
 
     private val _username = MutableStateFlow(storage.username)
     val username: StateFlow<String> = _username.asStateFlow()
+
+    /** Bumped on every successful unlock (see [AuthUiState.Success]). */
+    private var unlockGeneration = 0L
 
     val busy: Boolean
         get() = uiState.value is AuthUiState.Deriving || uiState.value is AuthUiState.Loading
@@ -133,7 +143,12 @@ class AuthViewModel(
                         AuthPhase.NETWORK -> AuthUiState.Loading
                     }
                 }
-                _uiState.value = AuthUiState.Success(outcome.vaultKey, outcome.seedWarning)
+                unlockGeneration++
+                _uiState.value = AuthUiState.Success(
+                    vaultKey = outcome.vaultKey,
+                    categorySeedWarning = outcome.seedWarning,
+                    unlockGeneration = unlockGeneration,
+                )
             } catch (error: Throwable) {
                 _uiState.value = AuthUiState.Error(errorUiMessage(error))
             } finally {

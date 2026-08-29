@@ -92,6 +92,20 @@ class VaultApiEncodingTest {
         assertRejected { VaultPayloads.itemBody(null, "###") }
     }
 
+    // ---- request paths ----------------------------------------------------
+
+    @Test
+    fun listItemsBuildsTheCategoryIdQueryParam() {
+        // The only branch encoding the contract's ?category_id= filter:
+        // a non-null category id becomes a query parameter...
+        assertEquals(
+            "/api/v1/vault/items?category_id=7",
+            HttpVaultApi.itemsListPath(7L),
+        )
+        // ...and null (Uncategorized / full list) sends no query at all.
+        assertEquals("/api/v1/vault/items", HttpVaultApi.itemsListPath(null))
+    }
+
     // ---- response parsing -------------------------------------------------
 
     @Test

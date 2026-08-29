@@ -43,8 +43,13 @@ class PayloadCipherTest {
 
     @Test
     fun roundTripMaxSizePayload() {
-        val payload = "a".repeat(PayloadCipher.MAX_PAYLOAD_BYTES) // exactly 1 MiB
+        // Accepted plaintext max = limit − 28 (12-byte nonce + 16-byte tag):
+        // the wire bound is enforced on the CIPHERTEXT size.
+        val payload = "a".repeat(
+            PayloadCipher.MAX_PAYLOAD_BYTES - PayloadCipher.CIPHER_OVERHEAD_BYTES
+        )
         val blob = PayloadCipher.encryptPayload(payload, vk)
+        assertEquals(PayloadCipher.MAX_PAYLOAD_BYTES, blob.size)
         assertEquals(payload, PayloadCipher.decryptToString(blob, vk))
     }
 
@@ -131,16 +136,25 @@ class PayloadCipherTest {
 
     @Test
     fun nameBoundsEnforced() {
-        // Exactly 255 bytes accepted...
-        val maxName = "n".repeat(PayloadCipher.MAX_NAME_BYTES)
-        assertEquals(maxName, PayloadCipher.decryptToString(PayloadCipher.encryptName(maxName, vk), vk))
+        assertEquals(28, PayloadCipher.CIPHER_OVERHEAD_BYTES) // 12 nonce + 16 tag
 
-        // ...256 bytes rejected...
+        // Accepted plaintext max = 255 − 28 = 227 bytes (the 255-byte bound
+        // applies to the ciphertext: nonce + tag included)...
+        val maxName = "n".repeat(PayloadCipher.MAX_NAME_BYTES - PayloadCipher.CIPHER_OVERHEAD_BYTES)
+        val blob = PayloadCipher.encryptName(maxName, vk)
+        assertEquals(PayloadCipher.MAX_NAME_BYTES, blob.size)
+        assertEquals(maxName, PayloadCipher.decryptToString(blob, vk))
+
+        // ...228 bytes rejected...
         try {
-            PayloadCipher.encryptName("n".repeat(PayloadCipher.MAX_NAME_BYTES + 1), vk)
-            fail("256-byte name must be rejected")
+            PayloadCipher.encryptName(
+                "n".repeat(PayloadCipher.MAX_NAME_BYTES - PayloadCipher.CIPHER_OVERHEAD_BYTES + 1),
+                vk,
+            )
+            fail("plaintext beyond limit − 28 must be rejected")
         } catch (expected: IllegalArgumentException) {
-            // expected
+            // display-ready message naming the real plaintext ceiling
+            assertTrue(expected.message!!.contains("227"))
         }
 
         // ...and empty rejected. Multibyte chars count as UTF-8 bytes: 128 ×
@@ -161,17 +175,24 @@ class PayloadCipherTest {
 
     @Test(timeout = 120_000)
     fun payloadBoundsEnforcedAtExactlyOneMebibyte() {
-        // Exactly 1 MiB accepted (mirrors backend TestVaultItemPayloadBoundaries)...
-        val atLimit = "p".repeat(PayloadCipher.MAX_PAYLOAD_BYTES)
+        // The wire bound (mirroring backend TestVaultItemPayloadBoundaries)
+        // applies to the CIPHERTEXT, so the accepted plaintext max is
+        // 1 MiB − 28 (12 nonce + 16 tag).
+        val maxPlaintext = PayloadCipher.MAX_PAYLOAD_BYTES - PayloadCipher.CIPHER_OVERHEAD_BYTES
+
+        // Exactly at the plaintext ceiling: the blob comes out at exactly 1 MiB.
+        val atLimit = "p".repeat(maxPlaintext)
         val blob = PayloadCipher.encryptPayload(atLimit, vk)
+        assertEquals(PayloadCipher.MAX_PAYLOAD_BYTES, blob.size)
         assertEquals(atLimit, PayloadCipher.decryptToString(blob, vk))
 
-        // ...1 MiB + 1 byte rejected client-side, before any network call.
+        // One byte over → rejected client-side, before any network call
+        // (previously this fell into the misleading 28-byte gap).
         try {
-            PayloadCipher.encryptPayload("p".repeat(PayloadCipher.MAX_PAYLOAD_BYTES + 1), vk)
-            fail("1 MiB + 1 byte payload must be rejected")
+            PayloadCipher.encryptPayload("p".repeat(maxPlaintext + 1), vk)
+            fail("plaintext beyond limit − 28 must be rejected")
         } catch (expected: IllegalArgumentException) {
-            // expected
+            assertTrue(expected.message!!.contains(maxPlaintext.toString()))
         }
 
         try {

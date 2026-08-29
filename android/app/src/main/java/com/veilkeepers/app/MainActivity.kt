@@ -27,6 +27,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -95,6 +97,7 @@ private fun AppRoot(viewModel: AuthViewModel, storage: SessionStorage) {
     when {
         s is AuthUiState.Success -> VaultRoot(
             vaultKey = s.vaultKey,
+            unlockGeneration = s.unlockGeneration,
             seedWarning = s.categorySeedWarning,
             storage = storage,
             onSessionReset = {
@@ -135,20 +138,22 @@ private fun AppRoot(viewModel: AuthViewModel, storage: SessionStorage) {
 private enum class VaultScreen { HOME, CATEGORY, ITEM_DETAIL, ITEM_EDIT }
 
 /**
- * Sprint 5 vault root: hosts the [VaultViewModel] (keyed by the in-memory VK
- * so each unlock gets a fresh instance) and switches Home / Category /
- * Item Detail / Item Edit via a remember-state enum, mirroring the auth
- * switcher pattern above.
+ * Sprint 5 vault root: hosts the [VaultViewModel] (keyed by a per-unlock
+ * generation counter — NEVER by secret material — so every unlock gets a
+ * fresh instance and a stale terminal-state ViewModel can never be reused
+ * on re-login) and switches Home / Category / Item Detail / Item Edit via a
+ * remember-state enum, mirroring the auth switcher pattern above.
  */
 @Composable
 private fun VaultRoot(
     vaultKey: ByteArray,
+    unlockGeneration: Long,
     seedWarning: String?,
     storage: SessionStorage,
     onSessionReset: () -> Unit,
 ) {
     val viewModel: VaultViewModel = viewModel(
-        key = "vault-" + vaultKey.contentHashCode(),
+        key = "vault-unlock-$unlockGeneration",
         factory = VaultViewModel.factory(vaultKey, storage),
     )
     val state by viewModel.uiState.collectAsState()
@@ -312,7 +317,20 @@ private fun VaultRoot(
 
         if (s is VaultUiState.Saving) {
             Surface(
-                modifier = Modifier.fillMaxSize(),
+                modifier = Modifier
+                    .fillMaxSize()
+                    // Consume ALL pointer events in the Initial pass so taps
+                    // during an in-flight save cannot start new mutations
+                    // (no touch-through under the scrim).
+                    .pointerInput(Unit) {
+                        awaitPointerEventScope {
+                            while (true) {
+                                awaitPointerEvent(PointerEventPass.Initial)
+                                    .changes
+                                    .forEach { it.consume() }
+                            }
+                        }
+                    },
                 color = Color.Black.copy(alpha = 0.35f),
             ) {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {

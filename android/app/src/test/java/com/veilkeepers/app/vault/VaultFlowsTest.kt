@@ -277,7 +277,7 @@ class VaultFlowsTest {
     }
 
     @Test
-    fun updateItemPutsThenGetsAndReturnsFreshData() = runBlocking {
+    fun updateItemPutsAndReconstructsLocally() = runBlocking {
         val created = repository.createItem(null, "original", "", emptyList())
         vaultApi.callLog.clear()
 
@@ -287,13 +287,80 @@ class VaultFlowsTest {
             "changed",
             "new notes",
             listOf(VaultField("k", "v")),
+            previous = created,
         )
 
-        // PUT followed by exactly one GET (the contract returns only status).
-        assertEquals(listOf("updateItem", "getItem"), vaultApi.callLog)
+        // PUT only — no GET refetch: a refresh failing AFTER the server
+        // committed must never falsely report "unchanged".
+        assertEquals(listOf("updateItem"), vaultApi.callLog)
         assertEquals("changed", updated.title)
         assertEquals("new notes", updated.notes)
         assertEquals(listOf(VaultField("k", "v")), updated.fields)
+
+        // Local reconstruction carries the previous entry's timestamps
+        // (the server bumped updated_at; the next full refresh self-corrects).
+        assertEquals(created.id, updated.id)
+        assertFalse(updated.undecryptable)
+        assertEquals(created.createdAt, updated.createdAt)
+        assertEquals(created.updatedAt, updated.updatedAt)
+
+        // The server really did commit: a full refresh decrypts the new state.
+        val refreshed = repository.refresh().items.items.single()
+        assertEquals("changed", refreshed.title)
+        assertEquals("new notes", refreshed.notes)
+    }
+
+    @Test
+    fun unknownIdsSurfaceNotFoundAndLeaveTheVaultUnchanged() = runBlocking {
+        // Seed real content so the assertions below prove nothing was corrupted
+        // by the failing calls (contract: unknown/foreign ids all 404 — the
+        // server never distinguishes "not yours" from "not there").
+        val category = repository.createCategory("Mine")
+        val item = repository.createItem(category.id, "keeper", "notes", emptyList())
+
+        // updateItem on an unknown id → NotFound.
+        try {
+            repository.updateItem(9999, null, "evil", "", emptyList(), previous = null)
+            fail("updateItem on an unknown id must 404")
+        } catch (expected: ApiError.NotFound) {
+            // expected
+        }
+
+        // deleteItem on an unknown id → NotFound.
+        try {
+            repository.deleteItem(9999)
+            fail("deleteItem on an unknown id must 404")
+        } catch (expected: ApiError.NotFound) {
+            // expected
+        }
+
+        // getItem on an unknown id → NotFound (wire-level contract).
+        try {
+            vaultApi.getItem(9999)
+            fail("getItem on an unknown id must 404")
+        } catch (expected: ApiError.NotFound) {
+            // expected
+        }
+
+        // Local state is fully intact afterwards.
+        val after = repository.refresh()
+        assertEquals(listOf(category.id), after.categories.map { it.id })
+        assertEquals(listOf(item.id), after.items.items.map { it.id })
+        assertEquals("keeper", after.items.items.single().title)
+
+        // And a 404 maps to a NON-terminal error state that keeps the last
+        // known-good content underneath (ownership is never revealed).
+        val previous = VaultUiState.Loaded(
+            categories = after.categories,
+            items = after.items.items,
+            recents = after.items.items.take(RECENT_LIMIT),
+            hasMoreWarning = after.hasMoreWarning,
+        )
+        val state = vaultUiError(ApiError.NotFound, previous)
+        assertTrue(state is VaultUiState.Error)
+        val error = state as VaultUiState.Error
+        assertEquals(previous, error.previous) // vault content survives
+        assertEquals(vaultErrorUiMessage(ApiError.NotFound), error.message)
     }
 
     @Test
