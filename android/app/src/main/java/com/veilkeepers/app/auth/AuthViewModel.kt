@@ -24,9 +24,19 @@ sealed class AuthUiState {
     /** Terminal failure with a display-ready message. */
     data class Error(val message: String) : AuthUiState()
 
-    /** Vault unlocked; the VK is held in memory ONLY and never persisted. */
-    data class Success(val vaultKey: ByteArray) : AuthUiState()
+    /**
+     * Vault unlocked; the VK is held in memory ONLY and never persisted.
+     * [categorySeedWarning] is a non-fatal notice when the default-category
+     * seeding at registration failed (the account itself was created).
+     */
+    data class Success(
+        val vaultKey: ByteArray,
+        val categorySeedWarning: String? = null,
+    ) : AuthUiState()
 }
+
+/** Internal [AuthViewModel.run] outcome: VK plus an optional seeding warning. */
+private data class AuthOutcome(val vaultKey: ByteArray, val seedWarning: String?)
 
 /**
  * Maps a failure to a display string. rate_limited gets the friendly
@@ -83,13 +93,16 @@ class AuthViewModel(
 
     fun register(password: CharArray) {
         run(username = _username.value, password = password) { user, chars, onPhase ->
-            repository.register(_serverUrl.value, user, chars, onPhase)
+            val vaultKey = repository.register(_serverUrl.value, user, chars, onPhase)
+            // spec-1.md §A.3: default categories are created client-side at
+            // registration. Best effort — a failure only surfaces a warning.
+            AuthOutcome(vaultKey, repository.seedDefaultCategories(vaultKey))
         }
     }
 
     fun login(password: CharArray) {
         run(username = _username.value, password = password) { user, chars, onPhase ->
-            repository.login(_serverUrl.value, user, chars, onPhase)
+            AuthOutcome(repository.login(_serverUrl.value, user, chars, onPhase), null)
         }
     }
 
@@ -103,7 +116,7 @@ class AuthViewModel(
     private fun run(
         username: String,
         password: CharArray,
-        action: suspend (user: String, chars: CharArray, onPhase: (AuthPhase) -> Unit) -> ByteArray,
+        action: suspend (user: String, chars: CharArray, onPhase: (AuthPhase) -> Unit) -> AuthOutcome,
     ) {
         if (busy) return
         if (username.isBlank() || password.isEmpty()) {
@@ -114,13 +127,13 @@ class AuthViewModel(
         _uiState.value = AuthUiState.Deriving
         viewModelScope.launch {
             try {
-                val vaultKey = action(_username.value, password) { phase ->
+                val outcome = action(_username.value, password) { phase ->
                     _uiState.value = when (phase) {
                         AuthPhase.DERIVING -> AuthUiState.Deriving
                         AuthPhase.NETWORK -> AuthUiState.Loading
                     }
                 }
-                _uiState.value = AuthUiState.Success(vaultKey)
+                _uiState.value = AuthUiState.Success(outcome.vaultKey, outcome.seedWarning)
             } catch (error: Throwable) {
                 _uiState.value = AuthUiState.Error(errorUiMessage(error))
             } finally {

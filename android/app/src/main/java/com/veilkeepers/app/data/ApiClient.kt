@@ -31,6 +31,14 @@ class ApiClient(
     fun postJson(path: String, body: JSONObject, bearerToken: String? = null): JSONObject =
         execute("POST", path, body = body.toString(), bearerToken = bearerToken)
 
+    /** PUT [body] to [path] and parse the 2xx response body as JSON. */
+    fun putJson(path: String, body: JSONObject, bearerToken: String? = null): JSONObject =
+        execute("PUT", path, body = body.toString(), bearerToken = bearerToken)
+
+    /** DELETE [path] (no request body) and parse the 2xx response body as JSON. */
+    fun deleteJson(path: String, bearerToken: String? = null): JSONObject =
+        execute("DELETE", path, body = null, bearerToken = bearerToken)
+
     private fun execute(method: String, path: String, body: String?, bearerToken: String?): JSONObject {
         val root = baseUrl.trim().trimEnd('/')
         val connection: HttpURLConnection = try {

@@ -3,12 +3,15 @@ package com.veilkeepers.app.auth
 import com.veilkeepers.app.crypto.Argon2Kdf
 import com.veilkeepers.app.crypto.AuthHash
 import com.veilkeepers.app.crypto.KdfParams
+import com.veilkeepers.app.crypto.PayloadCipher
 import com.veilkeepers.app.crypto.VaultKey
 import com.veilkeepers.app.data.ApiClient
 import com.veilkeepers.app.data.AuthApi
 import com.veilkeepers.app.data.HttpAuthApi
+import com.veilkeepers.app.data.HttpVaultApi
 import com.veilkeepers.app.data.LoginResult
 import com.veilkeepers.app.data.SessionStorage
+import com.veilkeepers.app.data.VaultApi
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -28,6 +31,11 @@ enum class AuthPhase { DERIVING, NETWORK }
 class AuthRepository(
     private val storage: SessionStorage,
     private val kdfParams: KdfParams = KdfParams.SPEC,
+    // [apiFactory] MUST stay the LAST parameter: existing callers (e.g. the
+    // Sprint 3 AuthFlowsTest) pass it as a trailing lambda.
+    private val vaultApiFactory: (baseUrl: String, bearerToken: String) -> VaultApi = { baseUrl, token ->
+        HttpVaultApi(ApiClient(baseUrl), token)
+    },
     private val apiFactory: (baseUrl: String) -> AuthApi = { baseUrl ->
         HttpAuthApi(ApiClient(baseUrl))
     },
@@ -148,6 +156,35 @@ class AuthRepository(
     }
 
     /**
+     * Seeds the five default categories (spec-1.md §A.3: created by the
+     * CLIENT at registration, encrypted with the freshly generated VK).
+     * Called right after a successful register (AuthViewModel orchestrates
+     * register + seed as one registration flow).
+     *
+     * Best-effort WITH an error surface — the chosen "smallest" design: if
+     * seeding fails the account still exists and register is considered a
+     * success, so this returns a display-ready warning string
+     * ([CATEGORY_SEED_WARNING]) instead of throwing. Returns null when all
+     * five categories were created. Never throws, never logs blob material.
+     */
+    suspend fun seedDefaultCategories(vaultKey: ByteArray): String? {
+        val token = storage.sessionToken
+        val base = storage.serverUrl
+        if (token.isEmpty() || base.isEmpty()) return CATEGORY_SEED_WARNING
+        return try {
+            val api = vaultApiFactory(normalizeUrl(base), token)
+            for (name in DEFAULT_CATEGORY_NAMES) {
+                api.createCategory(AuthHash.toBase64(PayloadCipher.encryptName(name, vaultKey)))
+            }
+            null
+        } catch (e: Exception) {
+            // Non-fatal: the account exists and the user can create
+            // categories from the vault. One generic message, no details.
+            CATEGORY_SEED_WARNING
+        }
+    }
+
+    /**
      * Revokes the server session and clears local session material. The local
      * store is cleared even when the network call fails (token may already be
      * expired/revoked; logout must never strand a session on-device).
@@ -186,5 +223,13 @@ class AuthRepository(
     companion object {
         /** Default homelab server hint (spec environment). */
         const val DEFAULT_SERVER_URL = "http://192.168.50.131:18080"
+
+        /** Default categories seeded client-side at registration (spec-1.md §A.3). */
+        val DEFAULT_CATEGORY_NAMES = listOf("Common", "Work", "Tools", "Personal", "Other")
+
+        /** Non-fatal warning surfaced when category seeding fails after a successful register. */
+        const val CATEGORY_SEED_WARNING =
+            "Account created, but the starter categories could not be added. " +
+                "You can create them from the vault."
     }
 }
