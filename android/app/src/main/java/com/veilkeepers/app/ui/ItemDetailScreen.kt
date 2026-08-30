@@ -19,21 +19,32 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.veilkeepers.app.security.ClipboardGuard
+import com.veilkeepers.app.security.ClipboardTimer
 import com.veilkeepers.app.vault.DecryptedItem
+import com.veilkeepers.app.vault.VaultField
 import com.veilkeepers.app.vault.VaultRepository
+import kotlinx.coroutines.delay
 
 /**
  * Notebook-style decrypted view of one item: serif title, ruled label/value
- * lines, free-form notes. Display-only — hide/show, copy and clipboard
- * handling deliberately do NOT exist here (Sprint 6).
- * Stateless — all data in, all events out.
+ * lines, free-form notes. Display-only apart from Sprint 6's secret
+ * affordances: secret fields render masked (bullets) by default with a
+ * show/hide toggle and a copy action guarded by the 60 s clipboard timer
+ * (spec.md §22/§23). Stateless — all data in, all events out.
  */
 @Composable
 fun ItemDetailScreen(
@@ -44,6 +55,21 @@ fun ItemDetailScreen(
     onDelete: (itemId: Long) -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val context = LocalContext.current
+    val clipboardGuard = remember { ClipboardGuard(context) }
+    var copyHint by remember { mutableStateOf<String?>(null) }
+    val onCopied: () -> Unit = {
+        copyHint = "Copied — clears in ${ClipboardTimer.CLIPBOARD_CLEAR_SECONDS} s"
+    }
+
+    // The hint fades on its own after a short moment.
+    LaunchedEffect(copyHint) {
+        if (copyHint != null) {
+            delay(2500)
+            copyHint = null
+        }
+    }
+
     Surface(
         modifier = modifier.fillMaxSize(),
         color = MaterialTheme.colorScheme.background,
@@ -111,7 +137,23 @@ fun ItemDetailScreen(
                         } else {
                             item.fields.forEach { field ->
                                 Spacer(Modifier.height(18.dp))
-                                NotebookFieldRow(label = field.label, value = field.value)
+                                NotebookFieldRow(
+                                    field = field,
+                                    onCopy = {
+                                        clipboardGuard.copy(field.value)
+                                        onCopied()
+                                    },
+                                )
+                            }
+                            if (copyHint != null) {
+                                Spacer(Modifier.height(10.dp))
+                                Text(
+                                    text = copyHint!!,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    fontStyle = FontStyle.Italic,
+                                    fontFamily = FontFamily.Serif,
+                                    color = MaterialTheme.colorScheme.primary,
+                                )
                             }
                             Spacer(Modifier.height(20.dp))
                             SectionLabel("Notes")
@@ -148,10 +190,17 @@ fun ItemDetailScreen(
     }
 }
 
-/** One ruled notebook line: amber eyebrow label, value resting on the rule. */
+/**
+ * One ruled notebook line: amber eyebrow label, value resting on the rule.
+ *
+ * Sprint 6: secret fields are hidden by default — bullets instead of
+ * plaintext — with a show/hide toggle kept in local remember state and a
+ * copy action routed through [ClipboardGuard] (spec.md §22).
+ */
 @Composable
-private fun NotebookFieldRow(label: String, value: String) {
+private fun NotebookFieldRow(field: VaultField, onCopy: () -> Unit) {
     val ruleColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.55f)
+    var revealed by remember { mutableStateOf(false) }
     Column(
         Modifier
             .fillMaxWidth()
@@ -166,19 +215,42 @@ private fun NotebookFieldRow(label: String, value: String) {
             .padding(bottom = 8.dp),
     ) {
         Text(
-            text = label.ifEmpty { "·" }.uppercase(),
+            text = field.label.ifEmpty { "·" }.uppercase(),
             style = MaterialTheme.typography.labelSmall,
             letterSpacing = 2.sp,
             color = MaterialTheme.colorScheme.primary,
         )
         Spacer(Modifier.height(2.dp))
-        Box {
-            Text(
-                text = value.ifEmpty { "—" },
-                style = MaterialTheme.typography.titleMedium,
-                fontFamily = FontFamily.Serif,
-                color = MaterialTheme.colorScheme.onSurface,
-            )
+        Row(modifier = Modifier.fillMaxWidth()) {
+            Box(Modifier.weight(1f)) {
+                if (field.isSecret && !revealed) {
+                    Text(
+                        // Masked by default; bullet count hints at length only,
+                        // capped so a 64-char token gives no exact oracle.
+                        text = MASK_BULLET.repeat(minOf(field.value.length, 12).coerceAtLeast(6)),
+                        style = MaterialTheme.typography.titleMedium,
+                        color = MaterialTheme.colorScheme.onSurface,
+                    )
+                } else {
+                    Text(
+                        text = field.value.ifEmpty { "—" },
+                        style = MaterialTheme.typography.titleMedium,
+                        fontFamily = FontFamily.Serif,
+                        color = MaterialTheme.colorScheme.onSurface,
+                    )
+                }
+            }
+            if (field.isSecret) {
+                TextButton(onClick = { revealed = !revealed }) {
+                    Text(if (revealed) "Hide" else "Show")
+                }
+            }
+            if (field.value.isNotEmpty()) {
+                TextButton(onClick = onCopy) { Text("Copy") }
+            }
         }
     }
 }
+
+/** Bullet glyph used for masked secrets (spec.md §22 example). */
+private const val MASK_BULLET = "•"

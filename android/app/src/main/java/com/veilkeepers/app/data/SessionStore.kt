@@ -30,6 +30,32 @@ interface SessionStorage {
     var expiresAt: String
 
     /**
+     * Sprint 6 — biometric-wrapped VK: base64(nonce || AES-256-GCM(VK)) under
+     * the Android Keystore key `vk_biometric` (spec-1.md §A.1 local storage).
+     * Empty when biometric unlock is not enrolled.
+     */
+    var biometricWrappedVkB64: String
+
+    /**
+     * Sprint 6 — auto-lock policy token (AutoLockPolicy.token), persisted per
+     * device. Default "IMMEDIATELY" (spec-1.md §B.10).
+     */
+    var autoLockPolicy: String
+
+    /** Sprint 6 — whether biometric unlock is enabled (opt-in, default off). */
+    var biometricEnabled: Boolean
+
+    /**
+     * Sprint 6 — offline unlock cache: the kdf_salt (base64) used at the last
+     * successful login/register, so the KEK can be re-derived locally when the
+     * vault is soft-locked or after a cold start (no network round-trip).
+     */
+    var kdfSaltB64: String
+
+    /** Sprint 6 — offline unlock cache: the kdf_params JSON ({"m":..,"t":..,"p":..}). */
+    var kdfParamsJson: String
+
+    /**
      * Stable random UUID generated once (spec-1.md §B.12). Survives [clear]
      * so the same device keeps the same identity.
      */
@@ -40,7 +66,9 @@ interface SessionStorage {
 
     /**
      * Wipes session material on logout. Keeps serverUrl (convenience) and
-     * deviceIdentifier (stable device identity, §B.12).
+     * deviceIdentifier (stable device identity, §B.12). Sprint 6: also wipes
+     * all session-scoped keys added for secure UX — the biometric blob + flag,
+     * the kdf salt/params cache, and the auto-lock policy.
      */
     fun clear()
 }
@@ -52,8 +80,10 @@ interface SessionStorage {
  * Keystore is corrupt/unavailable, EncryptedSharedPreferences cannot be
  * created. Session material is then kept MEMORY-ONLY for the lifetime of
  * this instance — it is never written to plain SharedPreferences — so the
- * user simply has to log in again after process death. The decision is
- * sticky per instance and logged once, secret-free.
+ * user simply has to log in again after process death. In fallback mode the
+ * biometric blob also never persists: enrollment requires the Keystore
+ * wrapping key anyway, so biometric unlock degrades to unavailable there.
+ * The decision is sticky per instance and logged once, secret-free.
  */
 class EncryptedSessionStore(context: Context) : SessionStorage {
 
@@ -127,6 +157,26 @@ class EncryptedSessionStore(context: Context) : SessionStorage {
         get() = read(KEY_EXPIRES_AT)
         set(value) = write(KEY_EXPIRES_AT, value)
 
+    override var biometricWrappedVkB64: String
+        get() = read(KEY_BIOMETRIC_WRAPPED_VK)
+        set(value) = write(KEY_BIOMETRIC_WRAPPED_VK, value)
+
+    override var autoLockPolicy: String
+        get() = read(KEY_AUTO_LOCK_POLICY).ifEmpty { DEFAULT_AUTO_LOCK_POLICY }
+        set(value) = write(KEY_AUTO_LOCK_POLICY, value)
+
+    override var biometricEnabled: Boolean
+        get() = read(KEY_BIOMETRIC_ENABLED) == "true"
+        set(value) = write(KEY_BIOMETRIC_ENABLED, if (value) "true" else "false")
+
+    override var kdfSaltB64: String
+        get() = read(KEY_KDF_SALT)
+        set(value) = write(KEY_KDF_SALT, value)
+
+    override var kdfParamsJson: String
+        get() = read(KEY_KDF_PARAMS)
+        set(value) = write(KEY_KDF_PARAMS, value)
+
     override val deviceIdentifier: String
         get() = storedDeviceIdentifier
 
@@ -143,6 +193,11 @@ class EncryptedSessionStore(context: Context) : SessionStorage {
             .remove(KEY_SESSION_TOKEN)
             .remove(KEY_WRAPPED_VAULT_KEY)
             .remove(KEY_EXPIRES_AT)
+            .remove(KEY_BIOMETRIC_WRAPPED_VK)
+            .remove(KEY_AUTO_LOCK_POLICY)
+            .remove(KEY_BIOMETRIC_ENABLED)
+            .remove(KEY_KDF_SALT)
+            .remove(KEY_KDF_PARAMS)
             .commit()
     }
 
@@ -166,5 +221,13 @@ class EncryptedSessionStore(context: Context) : SessionStorage {
         private const val KEY_WRAPPED_VAULT_KEY = "wrapped_vault_key"
         private const val KEY_EXPIRES_AT = "expires_at"
         private const val KEY_DEVICE_IDENTIFIER = "device_identifier"
+        private const val KEY_BIOMETRIC_WRAPPED_VK = "biometric_wrapped_vk"
+        private const val KEY_AUTO_LOCK_POLICY = "auto_lock_policy"
+        private const val KEY_BIOMETRIC_ENABLED = "biometric_enabled"
+        private const val KEY_KDF_SALT = "kdf_salt"
+        private const val KEY_KDF_PARAMS = "kdf_params"
+
+        /** Default auto-lock policy (spec-1.md §B.10: "Immediately"). */
+        private const val DEFAULT_AUTO_LOCK_POLICY = "IMMEDIATELY"
     }
 }

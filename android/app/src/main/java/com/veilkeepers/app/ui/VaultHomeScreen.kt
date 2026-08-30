@@ -20,7 +20,9 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -36,18 +38,27 @@ import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.veilkeepers.app.security.AutoLockPolicy
 import com.veilkeepers.app.vault.DecryptedItem
 import com.veilkeepers.app.vault.VaultUiState
 
 /**
  * Home screen: category grid (decrypted name + item_count), Recent section,
  * dismissible has_more warning banner, create-item/create-category
- * affordances, and lock & sign out. Stateless — all data in, all events out.
+ * affordances, settings (auto-lock policy + biometric toggle), and lock &
+ * sign out. Stateless — all data in, all events out.
  */
 @Composable
 fun VaultHomeScreen(
     state: VaultUiState.Loaded,
     seedWarning: String?,
+    autoLockPolicy: AutoLockPolicy,
+    biometricEnabled: Boolean,
+    biometricSettingAvailable: Boolean,
+    settingsNotice: String?,
+    onAutoLockPolicyChange: (AutoLockPolicy) -> Unit,
+    onEnableBiometric: () -> Unit,
+    onDisableBiometric: () -> Unit,
     onOpenCategory: (categoryId: Long?) -> Unit,
     onOpenItem: (itemId: Long) -> Unit,
     onNewItem: () -> Unit,
@@ -57,6 +68,7 @@ fun VaultHomeScreen(
     modifier: Modifier = Modifier,
 ) {
     var showNewCategory by remember { mutableStateOf(false) }
+    var showSettings by remember { mutableStateOf(false) }
     var seedWarningDismissed by remember { mutableStateOf(false) }
     val uncategorizedCount = state.items.count { it.categoryId == null }
 
@@ -86,6 +98,10 @@ fun VaultHomeScreen(
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
+                OutlinedButton(onClick = { showSettings = true }) {
+                    Text("Settings")
+                }
+                Spacer(Modifier.width(8.dp))
                 OutlinedButton(onClick = onLockAndSignOut) {
                     Text("Lock & sign out")
                 }
@@ -185,6 +201,117 @@ fun VaultHomeScreen(
             onDismiss = { showNewCategory = false },
         )
     }
+
+    if (showSettings) {
+        VaultSettingsDialog(
+            autoLockPolicy = autoLockPolicy,
+            biometricEnabled = biometricEnabled,
+            biometricSettingAvailable = biometricSettingAvailable,
+            notice = settingsNotice,
+            onAutoLockPolicyChange = onAutoLockPolicyChange,
+            onBiometricToggle = { enable ->
+                if (enable) onEnableBiometric() else onDisableBiometric()
+            },
+            onDismiss = { showSettings = false },
+        )
+    }
+}
+
+/**
+ * Sprint 6 vault settings (spec.md §24 + §25, spec-1.md §B.8/§B.10):
+ * auto-lock policy picker (default Immediately) and the opt-in biometric
+ * toggle. Enabling biometrics runs the enrollment prompt with the in-memory
+ * VK; disabling wipes the blob + Keystore alias. The explicit "Lock & sign
+ * out" button stays on the home screen, unchanged.
+ */
+@Composable
+internal fun VaultSettingsDialog(
+    autoLockPolicy: AutoLockPolicy,
+    biometricEnabled: Boolean,
+    biometricSettingAvailable: Boolean,
+    notice: String?,
+    onAutoLockPolicyChange: (AutoLockPolicy) -> Unit,
+    onBiometricToggle: (enable: Boolean) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Vault settings") },
+        text = {
+            Column(Modifier.fillMaxWidth()) {
+                SectionLabel("Auto lock")
+                Spacer(Modifier.height(4.dp))
+                AutoLockPolicy.entries.forEach { option ->
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { onAutoLockPolicyChange(option) }
+                            .padding(vertical = 2.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        RadioButton(
+                            selected = autoLockPolicy == option,
+                            onClick = { onAutoLockPolicyChange(option) },
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            text = autoLockLabel(option),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurface,
+                        )
+                    }
+                }
+
+                Spacer(Modifier.height(12.dp))
+                SectionLabel("Biometric unlock")
+                Spacer(Modifier.height(4.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            text = "Unlock with biometrics",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurface,
+                        )
+                        if (!biometricSettingAvailable && !biometricEnabled) {
+                            Text(
+                                text = "No strong biometric is enrolled on this device.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
+                    Switch(
+                        checked = biometricEnabled,
+                        onCheckedChange = onBiometricToggle,
+                        enabled = biometricSettingAvailable || biometricEnabled,
+                    )
+                }
+
+                if (notice != null) {
+                    Spacer(Modifier.height(10.dp))
+                    Text(
+                        text = notice,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            Button(onClick = onDismiss) { Text("Done") }
+        },
+    )
+}
+
+/** Display label for an auto-lock option (spec.md §24 wording). */
+internal fun autoLockLabel(policy: AutoLockPolicy): String = when (policy) {
+    AutoLockPolicy.IMMEDIATELY -> "Immediately"
+    AutoLockPolicy.ONE_MINUTE -> "1 minute"
+    AutoLockPolicy.FIVE_MINUTES -> "5 minutes"
+    AutoLockPolicy.FIFTEEN_MINUTES -> "15 minutes"
 }
 
 /** Resolves a display name for [categoryId]; null = Uncategorized. */

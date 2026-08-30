@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.MaterialTheme
@@ -26,6 +27,7 @@ import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -34,8 +36,12 @@ import com.veilkeepers.app.vault.DecryptedItem
 import com.veilkeepers.app.vault.UNTITLED
 import com.veilkeepers.app.vault.VaultField
 
-/** One editable label/value row draft. */
-private data class FieldDraft(val label: String, val value: String)
+/**
+ * One editable label/value row draft. Sprint 6: [isSecret] marks the row as
+ * a secret field — rendered masked by default in the detail view, encoded as
+ * the additive V1 payload flag `"secret":true`.
+ */
+private data class FieldDraft(val label: String, val value: String, val isSecret: Boolean = false)
 
 /**
  * Create/edit screen: title, category picker (incl. Uncategorized), dynamic
@@ -59,7 +65,7 @@ fun ItemEditScreen(
     var pickerExpanded by remember { mutableStateOf(false) }
     val drafts = remember {
         mutableStateListOf<FieldDraft>().apply {
-            editable?.fields?.forEach { add(FieldDraft(it.label, it.value)) }
+            editable?.fields?.forEach { add(FieldDraft(it.label, it.value, it.isSecret)) }
         }
     }
 
@@ -151,7 +157,21 @@ fun ItemEditScreen(
                             modifier = Modifier.weight(0.62f),
                         )
                     }
-                    Row(modifier = Modifier.fillMaxWidth()) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        // Sprint 6: per-row secret flag (spec.md §22) — defaults
+                        // OFF so existing items keep their plain rendering.
+                        Checkbox(
+                            checked = draft.isSecret,
+                            onCheckedChange = { drafts[index] = draft.copy(isSecret = it) },
+                        )
+                        Text(
+                            text = "Secret",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
                         Spacer(Modifier.weight(1f))
                         TextButton(onClick = { drafts.removeAt(index) }) { Text("Remove") }
                     }
@@ -179,7 +199,7 @@ fun ItemEditScreen(
                     // encrypted verbatim into the V1 payload.
                     val fields = drafts
                         .filter { it.label.isNotBlank() || it.value.isNotBlank() }
-                        .map { VaultField(it.label, it.value) }
+                        .map { VaultField(it.label, it.value, it.isSecret) }
                     onSave(selectedCategoryId, title.trim(), notes, fields)
                 },
                 modifier = Modifier.fillMaxWidth(),

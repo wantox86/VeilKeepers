@@ -19,6 +19,14 @@ import kotlinx.coroutines.withContext
 enum class AuthPhase { DERIVING, NETWORK }
 
 /**
+ * Signals that the OFFLINE unlock path cannot complete (missing kdf salt /
+ * params cache, missing wrapped VK blob, or a derivation/unwrap failure).
+ * The ViewModel treats this as "transparently fall back to the full network
+ * login flow" — never a user-visible error by itself.
+ */
+class OfflineUnlockUnavailableException(message: String) : Exception(message)
+
+/**
  * Implements the register/login/logout key flows exactly per spec-1.md §A.1.
  *
  * All KDF and crypto work runs on [Dispatchers.Default]; the plaintext VK is
@@ -90,6 +98,9 @@ class AuthRepository(
             // Reuse the derived verifier — saves a second 2–8 s derivation.
             val login = api.login(username, authHashB64, storage.deviceIdentifier, storage.deviceName())
             saveSession(base, username, login)
+            // Sprint 6: cache the KDF material for offline unlock (spec.md §25
+            // soft-lock path). The salt was generated client-side above.
+            saveKdfCache(AuthHash.toBase64(salt), kdfParams)
             returned = true
             vaultKey!!
         } finally {
@@ -144,6 +155,9 @@ class AuthRepository(
             // Unwrap BEFORE persisting: a failed unlock never stores state.
             val vaultKey = VaultKey.unwrap(wrappedBlob, kek)
             saveSession(base, username, login)
+            // Sprint 6: cache the KDF material from the kdf_lookup response
+            // (AuthApi field names: kdf_salt / kdf_params) for offline unlock.
+            saveKdfCache(info.saltB64, info.params)
             vaultKey
         } finally {
             salt?.fill(0)
@@ -151,6 +165,51 @@ class AuthRepository(
             kek?.fill(0)
             verifier?.fill(0)
             digest?.fill(0)
+            wrappedBlob?.fill(0)
+        }
+    }
+
+    /**
+     * Sprint 6 OFFLINE unlock (spec.md §24/§25 soft lock): re-derives the KEK
+     * from the CACHED kdf salt + params (written on the last successful
+     * login/register) and unwraps the locally stored wrapped VK — no network
+     * round-trip, the server session stays untouched.
+     *
+     * @return the plaintext VK — memory only.
+     * @throws OfflineUnlockUnavailableException when the cache is incomplete
+     * or derivation/unwrap fails; the caller (AuthViewModel) transparently
+     * falls back to the full network login flow in that case.
+     */
+    suspend fun unlockOffline(password: CharArray): ByteArray = withContext(Dispatchers.Default) {
+        val saltB64 = storage.kdfSaltB64
+        val paramsJson = storage.kdfParamsJson
+        val wrappedB64 = storage.wrappedVaultKeyB64
+        if (saltB64.isEmpty() || paramsJson.isEmpty() || wrappedB64.isEmpty()) {
+            throw OfflineUnlockUnavailableException("offline unlock cache incomplete")
+        }
+        var salt: ByteArray? = null
+        var derived: ByteArray? = null
+        var kek: ByteArray? = null
+        var wrappedBlob: ByteArray? = null
+        try {
+            salt = AuthHash.fromBase64(saltB64)
+            // parseFrom enforces the DoS ceilings on the cached (server-origin)
+            // params exactly like the login flow.
+            val params = KdfParams.parseFrom(paramsJson)
+            derived = Argon2Kdf.derive(password, salt, params)
+            kek = Argon2Kdf.split(derived).first
+            wrappedBlob = AuthHash.fromBase64(wrappedB64)
+            VaultKey.unwrap(wrappedBlob, kek)
+        } catch (e: OfflineUnlockUnavailableException) {
+            throw e
+        } catch (e: Exception) {
+            // Wrong password (GCM tag failure), corrupt cache or params —
+            // never leak which; the ViewModel falls back to network login.
+            throw OfflineUnlockUnavailableException("offline unlock failed")
+        } finally {
+            salt?.fill(0)
+            derived?.fill(0)
+            kek?.fill(0)
             wrappedBlob?.fill(0)
         }
     }
@@ -208,6 +267,17 @@ class AuthRepository(
         storage.sessionToken = login.sessionToken
         storage.wrappedVaultKeyB64 = login.wrappedVaultKeyB64
         storage.expiresAt = login.expiresAt
+    }
+
+    /**
+     * Sprint 6: persists the KDF salt + params used by the successful auth so
+     * [unlockOffline] can re-derive the KEK with no network round-trip. The
+     * cache holds NO secret material: salt and params are public inputs, the
+     * password/KEK/VK never touch storage.
+     */
+    private fun saveKdfCache(saltB64: String, params: KdfParams) {
+        storage.kdfSaltB64 = saltB64
+        storage.kdfParamsJson = params.encode()
     }
 
     private fun normalizeUrl(url: String): String {

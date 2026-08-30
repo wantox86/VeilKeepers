@@ -44,6 +44,11 @@ class LiveVaultE2ETest {
         override var sessionToken: String = ""
         override var wrappedVaultKeyB64: String = ""
         override var expiresAt: String = ""
+        override var biometricWrappedVkB64: String = ""
+        override var autoLockPolicy: String = "IMMEDIATELY"
+        override var biometricEnabled: Boolean = false
+        override var kdfSaltB64: String = ""
+        override var kdfParamsJson: String = ""
         private val deviceId: String = UUID.randomUUID().toString()
         override val deviceIdentifier: String get() = deviceId
         override fun deviceName(): String = "jvm-vault-e2e"
@@ -52,6 +57,11 @@ class LiveVaultE2ETest {
             sessionToken = ""
             wrappedVaultKeyB64 = ""
             expiresAt = ""
+            biometricWrappedVkB64 = ""
+            autoLockPolicy = "IMMEDIATELY"
+            biometricEnabled = false
+            kdfSaltB64 = ""
+            kdfParamsJson = ""
         }
     }
 

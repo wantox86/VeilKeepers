@@ -15,6 +15,13 @@ sealed class AuthUiState {
     /** Ready for input. */
     object Idle : AuthUiState()
 
+    /**
+     * Sprint 6: a valid server session exists but no VK is in memory
+     * (cold start, or after a soft auto-lock routed here). The UI shows the
+     * Unlock screen — password (offline KEK derivation) or biometric.
+     */
+    object AwaitingUnlock : AuthUiState()
+
     /** Argon2id derivation in progress (2–8 s on typical hardware). */
     object Deriving : AuthUiState()
 
@@ -69,7 +76,11 @@ class AuthViewModel(
     private val repository: AuthRepository,
 ) : ViewModel() {
 
-    private val _uiState = MutableStateFlow<AuthUiState>(AuthUiState.Idle)
+    private val _uiState = MutableStateFlow<AuthUiState>(
+        // Sprint 6 cold-start routing: a persisted session token with no VK
+        // in memory goes to the Unlock screen, NOT the login screen.
+        if (storage.sessionToken.isNotEmpty()) AuthUiState.AwaitingUnlock else AuthUiState.Idle
+    )
     val uiState: StateFlow<AuthUiState> = _uiState.asStateFlow()
 
     private val _serverUrl = MutableStateFlow(
@@ -115,6 +126,52 @@ class AuthViewModel(
             AuthOutcome(repository.login(_serverUrl.value, user, chars, onPhase), null)
         }
     }
+
+    /**
+     * Sprint 6 OFFLINE unlock (soft lock / cold start): derives the KEK from
+     * the cached kdf salt + params and unwraps the locally stored VK — no
+     * network round-trip, the server session stays untouched.
+     *
+     * DOCUMENTED FALLBACK: on cache-missing or any derive/unwrap failure the
+     * flow transparently degrades to the full network login ([login] path via
+     * the repository). The user sees one continuous "deriving → loading"
+     * sequence either way; a wrong password still surfaces as the network
+     * login's InvalidCredentials error.
+     */
+    fun unlockWithPassword(password: CharArray) {
+        run(username = _username.value, password = password) { user, chars, onPhase ->
+            onPhase(AuthPhase.DERIVING)
+            val vaultKey = try {
+                repository.unlockOffline(chars)
+            } catch (error: Throwable) {
+                // Transparent fallback: full network login flow.
+                repository.login(_serverUrl.value, user, chars, onPhase)
+            }
+            AuthOutcome(vaultKey, null)
+        }
+    }
+
+    /**
+     * Sprint 6 BIOMETRIC unlock (spec.md §25): the VK was already released
+     * locally by the Keystore — NO network call ever happens here. The
+     * server session from the last login simply continues.
+     */
+    fun unlockWithBiometric(vaultKey: ByteArray) {
+        if (busy) return
+        unlockGeneration++
+        _uiState.value = AuthUiState.Success(
+            vaultKey = vaultKey,
+            categorySeedWarning = null,
+            unlockGeneration = unlockGeneration,
+        )
+    }
+
+    /**
+     * Sprint 6: biometric availability for the Unlock screen — enrolled
+     * (toggle on + blob present) AND hardware available. Pure local check.
+     */
+    fun biometricEnrolled(): Boolean =
+        storage.biometricEnabled && storage.biometricWrappedVkB64.isNotEmpty()
 
     fun logout() {
         viewModelScope.launch {

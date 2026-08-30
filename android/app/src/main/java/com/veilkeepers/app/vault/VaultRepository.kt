@@ -133,11 +133,20 @@ class VaultRepository(
 
     /**
      * Zeroizes the in-memory VK. Idempotent. Called on EVERY terminal path
-     * (lock & sign out AND session-expired) so the plaintext VK never
-     * outlives the session, regardless of how the vault was exited.
+     * (lock & sign out, auto-lock, AND session-expired) so the plaintext VK
+     * never outlives the session, regardless of how the vault was exited.
      */
     fun zeroizeVaultKey() {
         vaultKey.fill(0)
+    }
+
+    /**
+     * Soft auto-lock (Sprint 6, spec.md §24): zeroizes the VK ONLY — the
+     * server session stays alive and unlock (password or biometric) brings
+     * the vault straight back. Only [lockAndLogout] revokes the session.
+     */
+    fun lock() {
+        zeroizeVaultKey()
     }
 
     /**

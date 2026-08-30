@@ -6,8 +6,14 @@ import org.json.JSONObject
 /** Display title for items whose payload lacks a (usable) title. */
 const val UNTITLED = "(untitled)"
 
-/** One label/value row inside a vault item payload. */
-data class VaultField(val label: String, val value: String)
+/**
+ * One label/value row inside a vault item payload.
+ *
+ * [isSecret] (Sprint 6, spec.md §22): secrets render masked by default with
+ * show/hide/copy affordances. Wire encoding is ADDITIVE — the payload only
+ * gains `"secret":true` when set; old blobs (no key) parse as non-secret.
+ */
+data class VaultField(val label: String, val value: String, val isSecret: Boolean = false)
 
 /** Decrypted domain view of a backend category entry. */
 data class DecryptedCategory(
@@ -52,12 +58,14 @@ data class VaultSnapshot(
  * Internal JSON schema V1 of the encrypted vault item payload
  * (spec-1.md §C, evolutionary):
  *
- *     {"v":1,"title":str,"notes":str,"fields":[{"label":str,"value":str}]}
+ *     {"v":1,"title":str,"notes":str,"fields":[{"label":str,"value":str,"secret":bool?}]}
  *
  * The title lives INSIDE the payload (spec-1.md §A.3) — there is no title
  * column on the server, which only ever stores the opaque ciphertext.
  * Parsing is intentionally lenient: unknown keys are ignored (forward
- * compatibility), a missing/blank title becomes [UNTITLED].
+ * compatibility), a missing/blank title becomes [UNTITLED]. Sprint 6: the
+ * per-field `"secret"` flag is optional — written ONLY when true, parsed
+ * as false when missing (old payloads unchanged; the schema stays V1).
  */
 object ItemPayload {
     /** Schema version written by [encode]. */
@@ -67,7 +75,11 @@ object ItemPayload {
     fun encode(title: String, notes: String, fields: List<VaultField>): String {
         val jsonFields = JSONArray()
         for (field in fields) {
-            jsonFields.put(JSONObject().put("label", field.label).put("value", field.value))
+            val jsonField = JSONObject().put("label", field.label).put("value", field.value)
+            // Additive V1 extension: emit the flag ONLY when true so blobs of
+            // non-secret fields stay byte-compatible with Sprint 5 output.
+            if (field.isSecret) jsonField.put("secret", true)
+            jsonFields.put(jsonField)
         }
         return JSONObject()
             .put("v", VERSION)
@@ -92,7 +104,14 @@ object ItemPayload {
         obj.optJSONArray("fields")?.let { arr ->
             for (i in 0 until arr.length()) {
                 val entry = arr.optJSONObject(i) ?: continue
-                fields.add(VaultField(entry.optString("label", ""), entry.optString("value", "")))
+                fields.add(
+                    VaultField(
+                        entry.optString("label", ""),
+                        entry.optString("value", ""),
+                        // Missing key → false: old blobs parse unchanged.
+                        entry.optBoolean("secret", false),
+                    )
+                )
             }
         }
         return Content(title, notes, fields)

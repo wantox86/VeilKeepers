@@ -2,6 +2,10 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Sprint 6 (spec.md §25, spec-1.md §B.8): biometric unlock is OPT-IN and
+         local-only — it releases the Keystore-wrapped vault key, never
+         authenticating against the backend. -->
+    <uses-permission android:name="android.permission.USE_BIOMETRIC" />
 
     <!-- spec-1.md §A.4: V0.1 talks plain HTTP to the homelab server (user-supplied
          LAN URL). By key design (§A.1) only auth_hash + ciphertext cross the wire;

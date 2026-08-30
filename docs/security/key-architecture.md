@@ -121,9 +121,38 @@ reverse-proxy HTTPS per spec.md §43.
   EncryptedSharedPreferences cannot be created, session material is kept
   memory-only (never in plain SharedPreferences) and the user must re-login
   after process death; the fallback is logged once, secret-free.
-- Biometric unlock (later sprint): VK wrapped by an Android Keystore key with
+- Biometric unlock (Sprint 6): VK wrapped by an Android Keystore key with
   `setUserAuthenticationRequired(true)`, blob in EncryptedSharedPreferences;
-  auto-lock wipes the VK from memory.
+  auto-lock wipes the VK from memory. Implemented contract:
+  - Keystore alias `vk_biometric`: AES-256, GCM, no padding, generated with
+    `setUserAuthenticationRequired(true)` and
+    `setInvalidatedByBiometricEnrollment(true)` (any new fingerprint / screen
+    credential change kills the key by OS policy).
+  - Blob location & layout: `biometricWrappedVkB64` in the session store
+    (EncryptedSharedPreferences), `base64(nonce(12) || ciphertext+tag)` — the
+    same convention as the KEK-wrapped VK in §3. Enrollment is OPT-IN via a
+    vault-settings toggle (default OFF) and needs the in-memory VK; the wrap
+    happens only inside the BiometricPrompt success callback (BIOMETRIC_STRONG).
+  - Unlock never touches the backend (spec.md §25): the Keystore key is used
+    purely as a local gate — biometric success releases the decrypt cipher,
+    `doFinal` recovers the VK, and the existing server session is reused.
+  - Invalidation policy: if cipher creation/use fails with
+    `InvalidKeyException` (key gone or user-auth state lost), the blob and the
+    toggle are wiped and the app falls back to password unlock — silently, with
+    no error detail surfaced. Disabling the toggle or signing out deletes both
+    the blob and the Keystore alias.
+- Soft auto-lock (Sprint 6, spec.md §24): after the configured timeout
+  (Immediately [default] / 1 / 5 / 15 minutes) in background the VK is
+  zeroized in memory — the server session is NOT revoked. The user re-enters
+  via the Unlock screen: password (offline KEK re-derivation from the cached
+  kdf salt + params — public inputs only — with transparent fallback to the
+  full network login when the cache is missing) or biometrics. Only the
+  explicit "Lock & sign out" action revokes the server session.
+- Clipboard auto-clear (Sprint 6, spec.md §23): secret copies are tagged with
+  an app-owned clip label and cleared after 60 s — but only if our label is
+  still the primary clip, so a later user copy is never clobbered. Limitation:
+  the timer is in-process; a process kill or device restart before the 60 s
+  window ends leaves the clip in place (clear does not survive restarts).
 - Secrets are never logged (spec-1.md §G.6).
 
 ## 9. Derivation latency & escalation path

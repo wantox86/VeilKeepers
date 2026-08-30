@@ -1,7 +1,12 @@
 package com.veilkeepers.app
 
+import android.app.Activity
+import android.app.Application
 import android.os.Bundle
-import androidx.activity.ComponentActivity
+import android.os.Handler
+import android.os.Looper
+import android.os.SystemClock
+import android.view.WindowManager
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -30,41 +35,132 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.unit.dp
+import androidx.fragment.app.FragmentActivity
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.veilkeepers.app.auth.AuthUiState
 import com.veilkeepers.app.auth.AuthViewModel
+import com.veilkeepers.app.auth.BiometricUnlockController
+import com.veilkeepers.app.crypto.AndroidBiometricKeyStore
+import com.veilkeepers.app.crypto.BiometricVaultCore
 import com.veilkeepers.app.data.EncryptedSessionStore
 import com.veilkeepers.app.data.SessionStorage
+import com.veilkeepers.app.security.AutoLockController
+import com.veilkeepers.app.security.AutoLockPolicy
+import com.veilkeepers.app.security.Clock
 import com.veilkeepers.app.ui.CategoryScreen
 import com.veilkeepers.app.ui.ItemDetailScreen
 import com.veilkeepers.app.ui.ItemEditScreen
 import com.veilkeepers.app.ui.LoginScreen
 import com.veilkeepers.app.ui.RegisterScreen
+import com.veilkeepers.app.ui.UnlockScreen
 import com.veilkeepers.app.ui.VaultHomeScreen
 import com.veilkeepers.app.vault.VaultUiState
 import com.veilkeepers.app.vault.VaultViewModel
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 
 /**
- * Root activity: a simple state-driven switcher (Login / Register / Vault) —
+ * Root activity: a state-driven switcher (Login / Register / Unlock / Vault) —
  * intentionally no navigation library. The plaintext VK lives only inside
  * [AuthUiState.Success] while the vault is unlocked, and is zeroized when
  * the vault locks.
+ *
+ * Sprint 6: extends [FragmentActivity] (BiometricPrompt requirement), sets
+ * FLAG_SECURE before anything else (spec-1.md §B.11 — the single activity
+ * covers every screen), and drives the soft auto-lock state machine from a
+ * started/stopped counter (NO lifecycle-process dependency, spec-1.md §G.7).
  */
-class MainActivity : ComponentActivity() {
+class MainActivity : FragmentActivity(), Application.ActivityLifecycleCallbacks {
+
+    private lateinit var storage: EncryptedSessionStore
+    private lateinit var autoLock: AutoLockController
+    private lateinit var biometricController: BiometricUnlockController
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private var pendingTimeout: Runnable? = null
+    private var startedCount = 0
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        // spec-1.md §B.11: FLAG_SECURE FIRST — every screen in this activity
+        // (auth, vault, settings) is screenshot/recents protected.
+        window.setFlags(WindowManager.LayoutParams.FLAG_SECURE, WindowManager.LayoutParams.FLAG_SECURE)
         super.onCreate(savedInstanceState)
 
-        val storage = EncryptedSessionStore(applicationContext)
+        storage = EncryptedSessionStore(applicationContext)
+        autoLock = AutoLockController(
+            clock = ElapsedRealtimeClock,
+            policy = AutoLockPolicy.fromToken(storage.autoLockPolicy),
+        )
+        biometricController = BiometricUnlockController(
+            applicationContext,
+            BiometricVaultCore(BiometricUnlockController.keyStore, storage),
+        )
+        application.registerActivityLifecycleCallbacks(this)
+
         val viewModel = ViewModelProvider(this, AuthViewModel.factory(storage))[AuthViewModel::class.java]
 
         setContent {
             MaterialTheme(colorScheme = VeilTheme) {
-                AppRoot(viewModel, storage)
+                AppRoot(viewModel, storage, autoLock, biometricController, this)
             }
         }
     }
+
+    override fun onDestroy() {
+        application.unregisterActivityLifecycleCallbacks(this)
+        mainHandler.removeCallbacksAndMessages(null)
+        super.onDestroy()
+    }
+
+    // ------------------------------------------------------------------
+    // Background detection: a started/stopped counter over ALL activity
+    // lifecycle callbacks (no lifecycle-process dependency, spec-1.md §G.7).
+    // The counter reaches zero exactly when the whole app leaves foreground.
+    // ------------------------------------------------------------------
+
+    override fun onActivityStarted(activity: Activity) {
+        if (activity !== this) return
+        pendingTimeout?.let(mainHandler::removeCallbacks)
+        pendingTimeout = null
+        if (startedCount++ == 0) {
+            // Returning within the grace period absorbs recreation flap.
+            autoLock.onEvent(AutoLockController.Event.FOREGROUND)
+        }
+    }
+
+    override fun onActivityStopped(activity: Activity) {
+        if (activity !== this) return
+        if (--startedCount > 0) return
+        autoLock.onEvent(AutoLockController.Event.BACKGROUND)
+        // One delayed TIMEOUT check at the policy deadline (+ grace); the
+        // controller only locks when still backgrounded at that moment.
+        val check = Runnable {
+            pendingTimeout = null
+            if (autoLock.onEvent(AutoLockController.Event.TIMEOUT)) {
+                _lockSignal.value++
+            }
+        }
+        pendingTimeout = check
+        mainHandler.postDelayed(check, autoLock.lockDelayMillis())
+    }
+
+    /**
+     * Monotonic soft-lock signal consumed by [VaultRoot]: bumped exactly when
+     * the auto-lock state machine decided "lock now" while backgrounded.
+     */
+    private val _lockSignal = MutableStateFlow(0L)
+    internal val lockSignal: StateFlow<Long> = _lockSignal
+
+    override fun onActivityCreated(activity: Activity, savedInstanceState: Bundle?) = Unit
+    override fun onActivityResumed(activity: Activity) = Unit
+    override fun onActivityPaused(activity: Activity) = Unit
+    override fun onActivitySaveInstanceState(activity: Activity, outState: Bundle) = Unit
+    override fun onActivityDestroyed(activity: Activity) = Unit
+}
+
+/** Monotonic clock for the auto-lock state machine (survives wall-clock edits). */
+private object ElapsedRealtimeClock : Clock {
+    override fun millis(): Long = SystemClock.elapsedRealtime()
 }
 
 /** Deep "behind the veil" palette: near-black violet + candlelight amber. */
@@ -86,21 +182,106 @@ private val VeilTheme = darkColorScheme(
 private enum class AuthScreen { LOGIN, REGISTER }
 
 @Composable
-private fun AppRoot(viewModel: AuthViewModel, storage: SessionStorage) {
+private fun AppRoot(
+    viewModel: AuthViewModel,
+    storage: SessionStorage,
+    autoLock: AutoLockController,
+    biometricController: BiometricUnlockController,
+    activity: MainActivity,
+) {
     val state by viewModel.uiState.collectAsState()
     val serverUrl by viewModel.serverUrl.collectAsState()
     val username by viewModel.username.collectAsState()
     var screen by remember { mutableStateOf(AuthScreen.LOGIN) }
 
+    // Sprint 6 device-facing settings, mirrored in remember state so the
+    // composables recompose when enrollment/toggles change.
+    var autoLockPolicy by remember { mutableStateOf(AutoLockPolicy.fromToken(storage.autoLockPolicy)) }
+    var biometricEnabled by remember { mutableStateOf(storage.biometricEnabled) }
+    var settingsNotice by remember { mutableStateOf<String?>(null) }
+    var biometricNotice by remember { mutableStateOf<String?>(null) }
+    val biometricHardware = remember { biometricController.hardwareAvailable() }
+
+    // Every successful unlock re-arms the auto-lock state machine.
+    LaunchedEffect(state) {
+        if (state is AuthUiState.Success) {
+            autoLock.onEvent(AutoLockController.Event.UNLOCKED)
+        }
+    }
+
     // Capture once: a delegated property cannot be smart-cast after `is`.
     val s = state
     when {
         s is AuthUiState.Success -> VaultRoot(
+            activity = activity,
             vaultKey = s.vaultKey,
             unlockGeneration = s.unlockGeneration,
             seedWarning = s.categorySeedWarning,
             storage = storage,
+            authState = s,
+            autoLockPolicy = autoLockPolicy,
+            biometricEnabled = biometricEnabled,
+            biometricHardware = biometricHardware,
+            settingsNotice = settingsNotice,
+            onAutoLockPolicyChange = { policy ->
+                storage.autoLockPolicy = policy.token
+                autoLock.policy = policy
+                autoLockPolicy = policy
+            },
+            onEnableBiometric = {
+                biometricController.enroll(
+                    activity,
+                    s.vaultKey,
+                    onSuccess = {
+                        biometricEnabled = true
+                        settingsNotice = "Biometric unlock enabled."
+                    },
+                    onError = { message -> settingsNotice = message },
+                )
+            },
+            onDisableBiometric = {
+                biometricController.disable()
+                biometricEnabled = false
+                settingsNotice = "Biometric unlock disabled."
+            },
+            onUnlockWithPassword = viewModel::unlockWithPassword,
+            onUnlockWithBiometric = {
+                biometricController.unlock(
+                    activity,
+                    onSuccess = viewModel::unlockWithBiometric,
+                    onError = { message -> biometricNotice = message },
+                )
+            },
+            biometricNotice = biometricNotice,
             onSessionReset = {
+                autoLock.onEvent(AutoLockController.Event.USER_LOCK)
+                biometricController.disable()
+                biometricEnabled = false
+                settingsNotice = null
+                viewModel.logout()
+                screen = AuthScreen.LOGIN
+            },
+        )
+
+        s is AuthUiState.AwaitingUnlock -> UnlockScreen(
+            state = state,
+            biometricAvailable = biometricEnabled &&
+                storage.biometricWrappedVkB64.isNotEmpty() &&
+                biometricHardware,
+            biometricNotice = biometricNotice,
+            onUnlockWithPassword = viewModel::unlockWithPassword,
+            onUnlockWithBiometric = {
+                biometricController.unlock(
+                    activity,
+                    onSuccess = viewModel::unlockWithBiometric,
+                    onError = { message -> biometricNotice = message },
+                )
+            },
+            // Explicit sign out from the unlock screen goes through the
+            // existing revoke-and-clear path (the ONLY session revocation).
+            onSignOut = {
+                autoLock.onEvent(AutoLockController.Event.USER_LOCK)
+                biometricController.disable()
                 viewModel.logout()
                 screen = AuthScreen.LOGIN
             },
@@ -143,13 +324,29 @@ private enum class VaultScreen { HOME, CATEGORY, ITEM_DETAIL, ITEM_EDIT }
  * fresh instance and a stale terminal-state ViewModel can never be reused
  * on re-login) and switches Home / Category / Item Detail / Item Edit via a
  * remember-state enum, mirroring the auth switcher pattern above.
+ *
+ * Sprint 6: also renders [UnlockScreen] when the vault is soft-locked
+ * ([VaultUiState.AutoLocked]) and applies the auto-lock signal coming from
+ * the activity's lifecycle counter.
  */
 @Composable
 private fun VaultRoot(
+    activity: MainActivity,
     vaultKey: ByteArray,
     unlockGeneration: Long,
     seedWarning: String?,
     storage: SessionStorage,
+    authState: AuthUiState.Success,
+    autoLockPolicy: AutoLockPolicy,
+    biometricEnabled: Boolean,
+    biometricHardware: Boolean,
+    settingsNotice: String?,
+    onAutoLockPolicyChange: (AutoLockPolicy) -> Unit,
+    onEnableBiometric: () -> Unit,
+    onDisableBiometric: () -> Unit,
+    onUnlockWithPassword: (CharArray) -> Unit,
+    onUnlockWithBiometric: () -> Unit,
+    biometricNotice: String?,
     onSessionReset: () -> Unit,
 ) {
     val viewModel: VaultViewModel = viewModel(
@@ -162,9 +359,21 @@ private fun VaultRoot(
 
     // Terminal states route back to the login screen (401 → re-login; lock →
     // the session was already revoked and the VK zeroized by the repository).
+    // AutoLocked is deliberately NOT part of this: soft lock keeps the
+    // session alive and renders the Unlock screen instead.
     LaunchedEffect(state) {
         if (state is VaultUiState.Locked || state is VaultUiState.SessionExpired) {
             onSessionReset()
+        }
+    }
+
+    // Sprint 6 soft auto-lock: the activity bumps its lock signal when the
+    // background deadline passes; zeroization happens inside autoLock()
+    // BEFORE the state flips to AutoLocked.
+    val lockTick by activity.lockSignal.collectAsState()
+    LaunchedEffect(lockTick) {
+        if (lockTick > 0) {
+            viewModel.autoLock()
         }
     }
 
@@ -182,10 +391,29 @@ private fun VaultRoot(
 
     Box(Modifier.fillMaxSize()) {
         when {
+            s is VaultUiState.AutoLocked -> UnlockScreen(
+                state = authState,
+                biometricAvailable = biometricEnabled &&
+                    storage.biometricWrappedVkB64.isNotEmpty() &&
+                    biometricHardware,
+                biometricNotice = biometricNotice,
+                onUnlockWithPassword = onUnlockWithPassword,
+                onUnlockWithBiometric = onUnlockWithBiometric,
+                // Signing out from a soft lock revokes the still-live session.
+                onSignOut = onSessionReset,
+            )
+
             loaded != null -> when (screen) {
                 VaultScreen.HOME -> VaultHomeScreen(
                     state = loaded,
                     seedWarning = seedWarning,
+                    autoLockPolicy = autoLockPolicy,
+                    biometricEnabled = biometricEnabled,
+                    biometricSettingAvailable = biometricHardware,
+                    settingsNotice = settingsNotice,
+                    onAutoLockPolicyChange = onAutoLockPolicyChange,
+                    onEnableBiometric = onEnableBiometric,
+                    onDisableBiometric = onDisableBiometric,
                     onOpenCategory = { id ->
                         categoryId = id
                         returnScreen = VaultScreen.HOME

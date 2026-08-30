@@ -47,6 +47,13 @@ sealed class VaultUiState {
 
     /** Terminal: the user locked the vault and signed out (VK zeroized). */
     object Locked : VaultUiState()
+
+    /**
+     * Sprint 6 soft-lock terminal state (spec.md §24): the VK was zeroized
+     * but the server session is still alive — the UI routes to the Unlock
+     * screen instead of the login screen.
+     */
+    object AutoLocked : VaultUiState()
 }
 
 /**
@@ -187,6 +194,17 @@ class VaultViewModel(private val repository: VaultRepository) : ViewModel() {
             repository.lockAndLogout()
             _uiState.value = VaultUiState.Locked
         }
+    }
+
+    /**
+     * Sprint 6 soft auto-lock: zeroizes the VK FIRST (synchronously, before
+     * the state flip) and emits [VaultUiState.AutoLocked]. The server session
+     * is untouched — unlock brings the vault back without a login.
+     */
+    fun autoLock() {
+        if (_uiState.value is VaultUiState.AutoLocked) return
+        repository.lock()
+        _uiState.value = VaultUiState.AutoLocked
     }
 
     private fun currentLoaded(): VaultUiState.Loaded? = when (val state = _uiState.value) {
