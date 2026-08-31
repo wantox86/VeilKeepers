@@ -41,12 +41,17 @@ import androidx.compose.ui.unit.sp
 import com.veilkeepers.app.security.AutoLockPolicy
 import com.veilkeepers.app.vault.DecryptedItem
 import com.veilkeepers.app.vault.VaultUiState
+import com.veilkeepers.app.vault.search.SearchEngine
+import com.veilkeepers.app.vault.search.SearchUiState
 
 /**
  * Home screen: category grid (decrypted name + item_count), Recent section,
  * dismissible has_more warning banner, create-item/create-category
  * affordances, settings (auto-lock policy + biometric toggle), and lock &
- * sign out. Stateless — all data in, all events out.
+ * sign out. Sprint 7: a local search entry point — a non-blank [searchQuery]
+ * swaps the grid/recents for results matched LOCALLY over the decrypted
+ * items; the query never leaves the process (docs/security/local-search.md).
+ * Stateless — all data in, all events out.
  */
 @Composable
 fun VaultHomeScreen(
@@ -56,6 +61,9 @@ fun VaultHomeScreen(
     biometricEnabled: Boolean,
     biometricSettingAvailable: Boolean,
     settingsNotice: String?,
+    searchQuery: String,
+    searchState: SearchUiState,
+    onSearchQueryChange: (String) -> Unit,
     onAutoLockPolicyChange: (AutoLockPolicy) -> Unit,
     onEnableBiometric: () -> Unit,
     onDisableBiometric: () -> Unit,
@@ -71,6 +79,7 @@ fun VaultHomeScreen(
     var showSettings by remember { mutableStateOf(false) }
     var seedWarningDismissed by remember { mutableStateOf(false) }
     val uncategorizedCount = state.items.count { it.categoryId == null }
+    val searching = searchQuery.trim().isNotEmpty()
 
     Surface(
         modifier = modifier.fillMaxSize(),
@@ -125,58 +134,78 @@ fun VaultHomeScreen(
                 Spacer(Modifier.height(10.dp))
             }
 
+            OutlinedTextField(
+                value = searchQuery,
+                onValueChange = onSearchQueryChange,
+                modifier = Modifier.fillMaxWidth(),
+                placeholder = { Text("Search your vault…") },
+                supportingText = {
+                    Text("Local only — queries never leave this device.")
+                },
+                singleLine = true,
+            )
+            Spacer(Modifier.height(10.dp))
+
             Column(
                 modifier = Modifier
                     .weight(1f)
                     .verticalScroll(rememberScrollState()),
             ) {
-                SectionLabel("Categories")
-                Spacer(Modifier.height(8.dp))
-
-                val cards = state.categories + null // trailing null = Uncategorized card
-                cards.chunked(2).forEach { pair ->
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(12.dp),
-                    ) {
-                        pair.forEach { category ->
-                            CategoryCard(
-                                modifier = Modifier.weight(1f),
-                                name = category?.name ?: "Uncategorized",
-                                itemCount = category?.itemCount ?: uncategorizedCount,
-                                subdued = category == null,
-                                onClick = { onOpenCategory(category?.id) },
-                            )
-                        }
-                        if (pair.size == 1) Spacer(Modifier.weight(1f))
-                    }
-                    Spacer(Modifier.height(12.dp))
-                }
-                if (state.categories.isEmpty()) {
-                    Text(
-                        text = "No categories yet — create one below.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    Spacer(Modifier.height(12.dp))
-                }
-
-                SectionLabel("Recent")
-                Spacer(Modifier.height(8.dp))
-                if (state.recents.isEmpty()) {
-                    Text(
-                        text = "Nothing behind the veil yet. Add your first item.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                if (searching) {
+                    SearchResultsSection(
+                        searchState = searchState,
+                        categoryNameFor = { categoryIdFor -> categoryNameFor(state, categoryIdFor) },
+                        onOpenItem = onOpenItem,
                     )
                 } else {
-                    state.recents.forEach { item ->
-                        VaultItemRow(
-                            item = item,
-                            subtitle = categoryNameFor(state, item.categoryId),
-                            onClick = { onOpenItem(item.id) },
+                    SectionLabel("Categories")
+                    Spacer(Modifier.height(8.dp))
+
+                    val cards = state.categories + null // trailing null = Uncategorized card
+                    cards.chunked(2).forEach { pair ->
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        ) {
+                            pair.forEach { category ->
+                                CategoryCard(
+                                    modifier = Modifier.weight(1f),
+                                    name = category?.name ?: "Uncategorized",
+                                    itemCount = category?.itemCount ?: uncategorizedCount,
+                                    subdued = category == null,
+                                    onClick = { onOpenCategory(category?.id) },
+                                )
+                            }
+                            if (pair.size == 1) Spacer(Modifier.weight(1f))
+                        }
+                        Spacer(Modifier.height(12.dp))
+                    }
+                    if (state.categories.isEmpty()) {
+                        Text(
+                            text = "No categories yet — create one below.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
-                        Spacer(Modifier.height(8.dp))
+                        Spacer(Modifier.height(12.dp))
+                    }
+
+                    SectionLabel("Recent")
+                    Spacer(Modifier.height(8.dp))
+                    if (state.recents.isEmpty()) {
+                        Text(
+                            text = "Nothing behind the veil yet. Add your first item.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    } else {
+                        state.recents.forEach { item ->
+                            VaultItemRow(
+                                item = item,
+                                subtitle = categoryNameFor(state, item.categoryId),
+                                onClick = { onOpenItem(item.id) },
+                            )
+                            Spacer(Modifier.height(8.dp))
+                        }
                     }
                 }
             }
@@ -487,4 +516,70 @@ internal fun CategoryNameDialog(
             TextButton(onClick = onDismiss) { Text("Cancel") }
         },
     )
+}
+
+/**
+ * Sprint 7 search results (spec-1.md §F row 7). Rows are title + category
+ * only; the per-row summary names WHERE the query matched (title / field
+ * label / notes) and NEVER what matched — secret values stay masked until
+ * the user opens the item and explicitly reveals them.
+ */
+@Composable
+internal fun SearchResultsSection(
+    searchState: SearchUiState,
+    categoryNameFor: (categoryId: Long?) -> String,
+    onOpenItem: (itemId: Long) -> Unit,
+) {
+    when (searchState) {
+        is SearchUiState.Idle, is SearchUiState.Loading -> {
+            Text(
+                text = "Searching the veil…",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+
+        is SearchUiState.Results -> {
+            SectionLabel("Results")
+            Spacer(Modifier.height(8.dp))
+            if (searchState.items.isEmpty()) {
+                Text(
+                    text = "No matches behind the veil for “${searchState.query}”.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            } else {
+                Text(
+                    text = if (searchState.items.size == 1) {
+                        "1 match"
+                    } else {
+                        "${searchState.items.size} matches"
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(Modifier.height(8.dp))
+                searchState.items.forEach { item ->
+                    VaultItemRow(
+                        item = item,
+                        subtitle = categoryNameFor(item.categoryId),
+                        onClick = { onOpenItem(item.id) },
+                    )
+                    SearchEngine.matchSummary(item, searchState.query)?.let { summary ->
+                        Spacer(Modifier.height(2.dp))
+                        Text(
+                            text = summary,
+                            style = MaterialTheme.typography.labelSmall,
+                            fontFamily = FontFamily.Serif,
+                            fontStyle = FontStyle.Italic,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                    Spacer(Modifier.height(8.dp))
+                }
+            }
+        }
+    }
 }

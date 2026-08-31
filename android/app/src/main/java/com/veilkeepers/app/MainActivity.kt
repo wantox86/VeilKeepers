@@ -60,6 +60,7 @@ import com.veilkeepers.app.ui.UnlockScreen
 import com.veilkeepers.app.ui.VaultHomeScreen
 import com.veilkeepers.app.vault.VaultUiState
 import com.veilkeepers.app.vault.VaultViewModel
+import com.veilkeepers.app.vault.search.SearchViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 
@@ -397,7 +398,17 @@ private fun VaultRoot(
         viewModelStoreOwner = vaultStoreOwner,
         factory = VaultViewModel.factory(vaultKey, storage),
     )
+    // Sprint 7 local search: mirrors the vault's decrypted items only — no
+    // repository/API reference, so the query can never reach the network.
+    // Same generation-keyed store as the vault VM, cleared on every unlock.
+    val searchViewModel: SearchViewModel = viewModel(
+        key = "vault-search-$unlockGeneration",
+        viewModelStoreOwner = vaultStoreOwner,
+        factory = SearchViewModel.factory(viewModel.uiState),
+    )
     val state by viewModel.uiState.collectAsState()
+    val searchQuery by searchViewModel.rawQuery.collectAsState()
+    val searchState by searchViewModel.searchState.collectAsState()
     // Capture once: a delegated property cannot be smart-cast after `is`.
     val s = state
 
@@ -455,6 +466,9 @@ private fun VaultRoot(
                     biometricEnabled = biometricEnabled,
                     biometricSettingAvailable = biometricHardware,
                     settingsNotice = settingsNotice,
+                    searchQuery = searchQuery,
+                    searchState = searchState,
+                    onSearchQueryChange = searchViewModel::onQueryChange,
                     onAutoLockPolicyChange = onAutoLockPolicyChange,
                     onEnableBiometric = onEnableBiometric,
                     onDisableBiometric = onDisableBiometric,
