@@ -41,6 +41,14 @@ class BiometricUnlockController(
 
     private val biometricManager = BiometricManager.from(context)
 
+    /**
+     * Sprint 6 F5: enrollment generation token. Bumped by [disable] (which
+     * also runs on Lock & sign out); an in-flight enrollment whose prompt
+     * completes AFTER the logout must not persist a blob wrapping the
+     * already-zeroized VK.
+     */
+    private var enrollGeneration = 0L
+
     /** Hardware/enrollment availability for BIOMETRIC_STRONG (no device credential). */
     fun hardwareAvailable(): Boolean =
         biometricManager.canAuthenticate(BiometricManager.Authenticators.BIOMETRIC_STRONG) ==
@@ -55,9 +63,14 @@ class BiometricUnlockController(
      * [vk] is the in-memory Vault Key — the user is already authenticated.
      */
     fun enroll(activity: FragmentActivity, vk: ByteArray, onSuccess: () -> Unit, onError: (String) -> Unit) {
+        val generation = enrollGeneration
         val cipher = try {
             keyStore.createWrapCipher()
         } catch (e: InvalidKeyException) {
+            // Self-healing (Sprint 6 F3): a cipher that cannot be created is
+            // poisoned by the Keystore alias — delete it so a re-enrollment
+            // starts from a fresh key instead of failing forever.
+            keyStore.deleteKey()
             onError(Text.INVALIDATED_MESSAGE)
             return
         } catch (e: Exception) {
@@ -67,6 +80,11 @@ class BiometricUnlockController(
 
         val callback = object : BiometricPrompt.AuthenticationCallback() {
             override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
+                // Sprint 6 F5: the user may have locked & signed out while the
+                // prompt was open — the VK is then already zeroized and the
+                // session cleared; persisting a blob now would enable a
+                // biometric "unlock" that releases an all-zero key.
+                if (generation != enrollGeneration) return
                 val promptCipher = result.cryptoObject?.cipher ?: cipher
                 try {
                     // The ONLY doFinal of the enrollment flow — inside the
@@ -114,6 +132,14 @@ class BiometricUnlockController(
     fun unlock(activity: FragmentActivity, onSuccess: (ByteArray) -> Unit, onError: (String) -> Unit) {
         when (val prep = core.prepareUnlock()) {
             is BiometricVaultCore.UnlockPrep.Failed -> {
+                // Sprint 6 F3: prepareUnlock only wipes the blob/flag on an
+                // Invalidated key; the poisoned Keystore alias must ALSO be
+                // deleted here (matching the finishUnlock path below), or a
+                // re-enrollment throws KeyPermanentlyInvalidatedException
+                // forever.
+                if (prep.result is BiometricVaultCore.UnlockResult.Invalidated) {
+                    keyStore.deleteKey()
+                }
                 onError(
                     when (prep.result) {
                         is BiometricVaultCore.UnlockResult.Invalidated -> Text.INVALIDATED_MESSAGE
@@ -167,6 +193,8 @@ class BiometricUnlockController(
      * alias. Called from the settings toggle and on sign out.
      */
     fun disable() {
+        // Invalidate any in-flight enrollment callback (Sprint 6 F5).
+        enrollGeneration++
         core.wipe()
         keyStore.deleteKey()
     }

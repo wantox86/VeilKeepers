@@ -23,6 +23,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -37,6 +38,8 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.unit.dp
 import androidx.fragment.app.FragmentActivity
 import androidx.lifecycle.ViewModelProvider
+import androidx.lifecycle.ViewModelStore
+import androidx.lifecycle.ViewModelStoreOwner
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.veilkeepers.app.auth.AuthUiState
 import com.veilkeepers.app.auth.AuthViewModel
@@ -209,6 +212,21 @@ private fun AppRoot(
         }
     }
 
+    // Sprint 6 F2: "unlock in progress" sticky flag. While the unlock screen
+    // is showing, unlockWithPassword moves the state through Deriving /
+    // Loading / Error — without this flag those states would fall into the
+    // LoginScreen branch, unmounting the unlock screen and stranding the
+    // user on login with a LIVE session. Set when the unlock screen shows;
+    // cleared on Success (→ vault) or on logout back to Idle (→ login).
+    var unlockInProgress by remember { mutableStateOf(state is AuthUiState.AwaitingUnlock) }
+    LaunchedEffect(state) {
+        unlockInProgress = when (state) {
+            is AuthUiState.AwaitingUnlock -> true
+            is AuthUiState.Success, is AuthUiState.Idle -> false
+            else -> unlockInProgress
+        }
+    }
+
     // Capture once: a delegated property cannot be smart-cast after `is`.
     val s = state
     when {
@@ -263,7 +281,10 @@ private fun AppRoot(
             },
         )
 
-        s is AuthUiState.AwaitingUnlock -> UnlockScreen(
+        s is AuthUiState.AwaitingUnlock ||
+            (unlockInProgress && (s is AuthUiState.Deriving ||
+                s is AuthUiState.Loading ||
+                s is AuthUiState.Error)) -> UnlockScreen(
             state = state,
             biometricAvailable = biometricEnabled &&
                 storage.biometricWrappedVkB64.isNotEmpty() &&
@@ -349,8 +370,31 @@ private fun VaultRoot(
     biometricNotice: String?,
     onSessionReset: () -> Unit,
 ) {
+    // Sprint 6 F6: each unlock generation gets its OWN ViewModelStore so the
+    // previous generation's VaultViewModel (zeroized key array + coroutine
+    // scope) is released when the key changes — otherwise instances
+    // accumulate in the activity's store for the whole process lifetime.
+    // We cannot use the activity's viewModelStore.clear() (that would also
+    // cancel the AuthViewModel's scope and break subsequent logins), and
+    // ViewModelStore.clear(key) is not public API. The DisposableEffect's
+    // onDispose captures the OLD store (from the composition that launched
+    // it) and runs after the keyed remember has swapped in the new one, so
+    // the cleanup is order-safe.
+    val vaultStore = remember(unlockGeneration) { ViewModelStore() }
+    // ViewModelStoreOwner is a plain interface (abstract `viewModelStore`
+    // property), not a fun interface — it must be implemented with an
+    // object expression, SAM conversion does not compile.
+    val vaultStoreOwner = remember(vaultStore) {
+        object : ViewModelStoreOwner {
+            override val viewModelStore: ViewModelStore = vaultStore
+        }
+    }
+    DisposableEffect(unlockGeneration) {
+        onDispose { vaultStore.clear() }
+    }
     val viewModel: VaultViewModel = viewModel(
         key = "vault-unlock-$unlockGeneration",
+        viewModelStoreOwner = vaultStoreOwner,
         factory = VaultViewModel.factory(vaultKey, storage),
     )
     val state by viewModel.uiState.collectAsState()

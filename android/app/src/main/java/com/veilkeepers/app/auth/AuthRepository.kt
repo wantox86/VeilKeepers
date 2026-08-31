@@ -202,6 +202,11 @@ class AuthRepository(
             VaultKey.unwrap(wrappedBlob, kek)
         } catch (e: OfflineUnlockUnavailableException) {
             throw e
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            // Sprint 6 F4: structured cancellation must propagate unchanged —
+            // never disguised as "offline unavailable" (that would kick the
+            // ViewModel into a network login on a dead scope).
+            throw e
         } catch (e: Exception) {
             // Wrong password (GCM tag failure), corrupt cache or params —
             // never leak which; the ViewModel falls back to network login.

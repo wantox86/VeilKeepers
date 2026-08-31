@@ -82,6 +82,69 @@ fun vaultUiError(error: Throwable, previous: VaultUiState.Loaded?): VaultUiState
     }
 
 /**
+ * True while an in-flight result may still be published. Terminal lock
+ * states are STICKY: a mutation or reload completing AFTER an auto-lock /
+ * lock / session-expiry must never overwrite them with stale data — the VK
+ * is already zeroized, and publishing Loaded would expose a vault backed
+ * by a zero key (every subsequent save would encrypt with it).
+ */
+internal fun isPublishableState(state: VaultUiState): Boolean = when (state) {
+    is VaultUiState.AutoLocked,
+    is VaultUiState.Locked,
+    is VaultUiState.SessionExpired,
+    -> false
+    else -> true
+}
+
+/**
+ * Mutation body, split from the viewModelScope wiring so the race semantics
+ * are testable on the plain JVM (viewModelScope needs the Android main
+ * thread). Runs under [mutationLock]; after [action] returns, the result is
+ * published ONLY if no terminal lock state landed while the call was in
+ * flight ([isPublishableState]).
+ */
+internal suspend fun runVaultMutation(
+    mutationLock: Mutex,
+    uiState: MutableStateFlow<VaultUiState>,
+    currentLoaded: () -> VaultUiState.Loaded?,
+    action: suspend (VaultUiState.Loaded) -> VaultUiState.Loaded,
+    onError: (Throwable, VaultUiState.Loaded?) -> VaultUiState,
+) {
+    mutationLock.withLock {
+        val previous = currentLoaded() ?: return
+        uiState.value = VaultUiState.Saving(previous)
+        try {
+            val result = action(previous)
+            if (isPublishableState(uiState.value)) {
+                uiState.value = result
+            }
+        } catch (error: Throwable) {
+            if (isPublishableState(uiState.value)) {
+                uiState.value = onError(error, previous)
+            }
+        }
+    }
+}
+
+/**
+ * Auto-lock transition body (same JVM-testability split as
+ * [runVaultMutation]). Serialized under [mutationLock] so the lock decision
+ * can never interleave with a mutation's publish step; [VaultUiState.AutoLocked]
+ * itself is sticky once set.
+ */
+internal suspend fun runAutoLock(
+    mutationLock: Mutex,
+    uiState: MutableStateFlow<VaultUiState>,
+    lock: () -> Unit,
+) {
+    mutationLock.withLock {
+        if (uiState.value is VaultUiState.AutoLocked) return
+        lock()
+        uiState.value = VaultUiState.AutoLocked
+    }
+}
+
+/**
  * Drives the vault screens over [VaultRepository]. Constructed via
  * [factory]; JVM tests exercise the repository and the pure helpers above
  * (viewModelScope needs the Android main thread).
@@ -109,9 +172,16 @@ class VaultViewModel(private val repository: VaultRepository) : ViewModel() {
             _uiState.value =
                 if (previous != null) VaultUiState.Saving(previous) else VaultUiState.Loading
             try {
-                _uiState.value = loadedFrom(repository.refresh())
+                val loaded = loadedFrom(repository.refresh())
+                // The vault may have locked itself while the fetch was in
+                // flight — never overwrite a terminal lock state.
+                if (isPublishableState(_uiState.value)) {
+                    _uiState.value = loaded
+                }
             } catch (error: Throwable) {
-                _uiState.value = failed(error, previous)
+                if (isPublishableState(_uiState.value)) {
+                    _uiState.value = failed(error, previous)
+                }
             }
         }
     }
@@ -197,14 +267,18 @@ class VaultViewModel(private val repository: VaultRepository) : ViewModel() {
     }
 
     /**
-     * Sprint 6 soft auto-lock: zeroizes the VK FIRST (synchronously, before
-     * the state flip) and emits [VaultUiState.AutoLocked]. The server session
-     * is untouched — unlock brings the vault back without a login.
+     * Sprint 6 soft auto-lock: zeroizes the VK FIRST (before the state flip)
+     * and emits [VaultUiState.AutoLocked]. The server session is untouched —
+     * unlock brings the vault back without a login.
+     *
+     * Serialized under [mutationLock]: an in-flight mutation either finishes
+     * publishing before the lock lands or its stale result is dropped by the
+     * [isPublishableState] guard — it can never reopen a locked vault.
      */
     fun autoLock() {
-        if (_uiState.value is VaultUiState.AutoLocked) return
-        repository.lock()
-        _uiState.value = VaultUiState.AutoLocked
+        viewModelScope.launch {
+            runAutoLock(mutationLock, _uiState) { repository.lock() }
+        }
     }
 
     private fun currentLoaded(): VaultUiState.Loaded? = when (val state = _uiState.value) {
@@ -218,15 +292,13 @@ class VaultViewModel(private val repository: VaultRepository) : ViewModel() {
         viewModelScope.launch {
             // Serialize: snapshot the state INSIDE the lock so concurrent
             // mutations never base their write on the same stale `previous`.
-            mutationLock.withLock {
-                val previous = currentLoaded() ?: return@launch
-                _uiState.value = VaultUiState.Saving(previous)
-                try {
-                    _uiState.value = action(previous)
-                } catch (error: Throwable) {
-                    _uiState.value = failed(error, previous)
-                }
-            }
+            runVaultMutation(
+                mutationLock = mutationLock,
+                uiState = _uiState,
+                currentLoaded = { currentLoaded() },
+                action = action,
+                onError = { error, previous -> failed(error, previous) },
+            )
         }
     }
 

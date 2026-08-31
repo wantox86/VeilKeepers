@@ -15,7 +15,12 @@ import com.veilkeepers.app.data.KdfInfo
 import com.veilkeepers.app.data.LoginResult
 import com.veilkeepers.app.data.SessionStorage
 import com.veilkeepers.app.data.VaultApi
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.yield
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -500,5 +505,76 @@ class VaultFlowsTest {
         } catch (expected: org.json.JSONException) {
             // expected
         }
+    }
+
+    @Test
+    fun terminalLockStatesAreNeverOverwrittenByLatePublishes() {
+        // AutoLocked / Locked / SessionExpired are STICKY: a mutation or
+        // reload completing after the vault locked itself must not republish
+        // Loaded/Error over them (the VK is already zeroized).
+        assertFalse(isPublishableState(VaultUiState.AutoLocked))
+        assertFalse(isPublishableState(VaultUiState.Locked))
+        assertFalse(isPublishableState(VaultUiState.SessionExpired))
+        assertTrue(isPublishableState(VaultUiState.Loading))
+        assertTrue(isPublishableState(VaultUiState.Saving(null)))
+        assertTrue(isPublishableState(VaultUiState.Error("x", null)))
+        assertTrue(isPublishableState(VaultUiState.Loaded(emptyList(), emptyList(), emptyList(), false)))
+    }
+
+    @Test
+    fun autoLockRaceInFlightMutationNeverReopensTheVault() = runBlocking {
+        // Sprint 6 F1 regression: user saves an item, the coroutine suspends
+        // in the network call, the app backgrounds and auto-lock zeroizes
+        // the VK — the late mutation result must NOT overwrite AutoLocked
+        // (otherwise the vault reappears "open" over an all-zero VK and the
+        // next save encrypts with the zero key).
+        val mutationLock = Mutex()
+        val uiState = MutableStateFlow<VaultUiState>(VaultUiState.Loading)
+        val item = repository.createItem(null, "Race item", "", emptyList())
+        val loaded = VaultUiState.Loaded(emptyList(), listOf(item), listOf(item), false)
+        uiState.value = loaded
+
+        val gate = CompletableDeferred<Unit>()
+        val mutation = launch {
+            runVaultMutation(
+                mutationLock = mutationLock,
+                uiState = uiState,
+                currentLoaded = { loaded },
+                action = { prev ->
+                    gate.await() // "network" call suspends until released
+                    prev.copy(items = emptyList(), recents = emptyList())
+                },
+                onError = { _, _ -> VaultUiState.Loading },
+            )
+        }
+        // Wait until the mutation is actually in flight (state = Saving).
+        while (uiState.value !is VaultUiState.Saving) yield()
+
+        // Auto-lock lands while the mutation is suspended.
+        val lockJob = launch {
+            runAutoLock(mutationLock, uiState) { repository.lock() }
+        }
+
+        // The network call completes AFTER the lock was requested.
+        gate.complete(Unit)
+        mutation.join()
+        lockJob.join()
+
+        assertTrue("state must stay AutoLocked", uiState.value is VaultUiState.AutoLocked)
+        assertTrue("VK must be zeroized", vk.all { it == 0.toByte() })
+        assertEquals("soft lock keeps the session alive", "test-token", storage.sessionToken)
+    }
+
+    @Test
+    fun softLockZeroizesTheKeyButKeepsTheSessionAlive() {
+        // Sprint 6 F8: soft lock() semantics — zeroize the VK ONLY; the
+        // server session stays valid (no logout call, token untouched).
+        assertTrue("fresh VK is nonzero", vk.any { it != 0.toByte() })
+
+        repository.lock()
+
+        assertTrue("VK must be zeroized", vk.all { it == 0.toByte() })
+        assertEquals("session token survives a soft lock", "test-token", storage.sessionToken)
+        assertEquals("no logout call on soft lock", 0, authApi.logoutCalls)
     }
 }

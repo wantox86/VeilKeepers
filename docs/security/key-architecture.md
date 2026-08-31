@@ -153,6 +153,10 @@ reverse-proxy HTTPS per spec.md §43.
   still the primary clip, so a later user copy is never clobbered. Limitation:
   the timer is in-process; a process kill or device restart before the 60 s
   window ends leaves the clip in place (clear does not survive restarts).
+  Deviation from spec-1.md §B.9: the auto-clear window is a FIXED 60-second
+  constant in V0.1 — the spec's "configurable" option is deliberately
+  deferred (frozen constant in ClipboardGuard; a user-facing setting is
+  roadmap, not V0.1).
 - Secrets are never logged (spec-1.md §G.6).
 
 ## 9. Derivation latency & escalation path

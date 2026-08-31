@@ -37,8 +37,11 @@ interface SessionStorage {
     var biometricWrappedVkB64: String
 
     /**
-     * Sprint 6 — auto-lock policy token (AutoLockPolicy.token), persisted per
-     * device. Default "IMMEDIATELY" (spec-1.md §B.10).
+     * Sprint 6 — auto-lock policy token (AutoLockPolicy.token). CONTRACT
+     * (Sprint 6 review F9): this value is SESSION-scoped, NOT persisted per
+     * device — [clear] wipes it on sign out and the policy deliberately
+     * resets to "IMMEDIATELY" (the safest choice, spec-1.md §B.10 default);
+     * the user picks it again per session in vault settings.
      */
     var autoLockPolicy: String
 
@@ -68,7 +71,8 @@ interface SessionStorage {
      * Wipes session material on logout. Keeps serverUrl (convenience) and
      * deviceIdentifier (stable device identity, §B.12). Sprint 6: also wipes
      * all session-scoped keys added for secure UX — the biometric blob + flag,
-     * the kdf salt/params cache, and the auto-lock policy.
+     * the kdf salt/params cache, and the auto-lock policy (which therefore
+     * defaults back to IMMEDIATELY after sign out — deliberate, safer).
      */
     fun clear()
 }
@@ -184,7 +188,11 @@ class EncryptedSessionStore(context: Context) : SessionStorage {
 
     override fun clear() {
         if (fallback) {
+            // Sprint 6 F10: keep the "Keeps serverUrl" contract in fallback
+            // mode too (memory.clear() alone would wipe it).
+            val keptServerUrl = memory[KEY_SERVER_URL]
             memory.clear()
+            if (keptServerUrl != null) memory[KEY_SERVER_URL] = keptServerUrl
             return
         }
         // commit() — logout must durably wipe credentials before returning.

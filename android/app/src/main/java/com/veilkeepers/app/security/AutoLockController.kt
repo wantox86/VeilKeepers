@@ -3,7 +3,9 @@ package com.veilkeepers.app.security
 /**
  * Auto-lock policy (spec-1.md §B.10): default "Immediately"; options
  * immediately / 1 / 5 / 15 minutes. The [token] string form is what gets
- * persisted in [com.veilkeepers.app.data.SessionStorage.autoLockPolicy].
+ * stored in [com.veilkeepers.app.data.SessionStorage.autoLockPolicy] —
+ * SESSION-scoped: sign-out wipes it and the policy resets to the
+ * "Immediately" default (review F9, deliberate).
  */
 enum class AutoLockPolicy(val token: String, val timeoutMillis: Long) {
     IMMEDIATELY("IMMEDIATELY", 0L),

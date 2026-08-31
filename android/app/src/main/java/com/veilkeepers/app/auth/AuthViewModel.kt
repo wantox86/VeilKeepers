@@ -5,6 +5,7 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.veilkeepers.app.data.ApiError
 import com.veilkeepers.app.data.SessionStorage
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -143,8 +144,12 @@ class AuthViewModel(
             onPhase(AuthPhase.DERIVING)
             val vaultKey = try {
                 repository.unlockOffline(chars)
-            } catch (error: Throwable) {
-                // Transparent fallback: full network login flow.
+            } catch (error: OfflineUnlockUnavailableException) {
+                // Transparent fallback: full network login flow. ONLY the
+                // documented "offline unavailable" exception may trigger it —
+                // Sprint 6 F4: a blanket catch here would also swallow a
+                // CancellationException from a cancelled viewModelScope and
+                // start a network login on a dead scope.
                 repository.login(_serverUrl.value, user, chars, onPhase)
             }
             AuthOutcome(vaultKey, null)
@@ -207,6 +212,10 @@ class AuthViewModel(
                     unlockGeneration = unlockGeneration,
                 )
             } catch (error: Throwable) {
+                // Sprint 6 F4: never swallow structured cancellation — a
+                // cancelled viewModelScope must not surface as a fake error
+                // state (and finally still zeroizes the password below).
+                if (error is CancellationException) throw error
                 _uiState.value = AuthUiState.Error(errorUiMessage(error))
             } finally {
                 password.fill('\u0000')
