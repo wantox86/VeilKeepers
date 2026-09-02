@@ -7,10 +7,13 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strconv"
 	"time"
 
 	"github.com/wantox86/VeilKeepers/backend/internal/auth"
+	"github.com/wantox86/VeilKeepers/backend/internal/config"
 	"github.com/wantox86/VeilKeepers/backend/internal/store"
 )
 
@@ -72,14 +75,17 @@ type itemRequest struct {
 }
 
 // vaultAPI groups the state of the /api/v1/vault/items handlers.
+// attachmentDir is the on-disk directory holding attachment ciphertext;
+// handleDelete needs it to cascade-remove an item's attachment files.
 type vaultAPI struct {
-	st apiStore
+	st            apiStore
+	attachmentDir string
 }
 
 // registerVaultRoutes mounts the vault item endpoints, all guarded by
 // the bearer-session middleware.
-func registerVaultRoutes(mux *http.ServeMux, st apiStore) {
-	v := &vaultAPI{st: st}
+func registerVaultRoutes(mux *http.ServeMux, cfg config.Config, st apiStore) {
+	v := &vaultAPI{st: st, attachmentDir: cfg.AttachmentDir}
 	mux.Handle("GET /api/v1/vault/items",
 		auth.RequireSession(http.HandlerFunc(v.handleList), st))
 	mux.Handle("POST /api/v1/vault/items",
@@ -279,6 +285,19 @@ func (v *vaultAPI) handleDelete(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), requestTimeout)
 	defer cancel()
 
+	// Capture the attachment storage paths BEFORE the delete: the foreign
+	// key's ON DELETE CASCADE removes the rows, but the ciphertext files
+	// on disk are ours to clean up. A missing/foreign item yields
+	// ErrNotFound here — treated as "no files" and left for DeleteItem to
+	// report as 404. Any other error aborts before deleting so files are
+	// never orphaned.
+	attachments, err := v.st.ListAttachments(ctx, userID, itemID)
+	if err != nil && !errors.Is(err, store.ErrNotFound) {
+		writeError(w, http.StatusInternalServerError, codeInternal, msgInternal)
+		slog.Error(outcome+" failed", "err", err.Error(), "user_id", userID, "item_id", itemID)
+		return
+	}
+
 	if err := v.st.DeleteItem(ctx, userID, itemID); err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			writeError(w, http.StatusNotFound, codeNotFound, msgNotFound)
@@ -288,6 +307,15 @@ func (v *vaultAPI) handleDelete(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, codeInternal, msgInternal)
 		slog.Error(outcome+" failed", "err", err.Error(), "user_id", userID)
 		return
+	}
+
+	// Best-effort removal of each attachment's ciphertext file. The rows
+	// are already gone; a leftover file is an unguessable orphan, so a
+	// failed remove is logged (without its path) and never fails the call.
+	for _, att := range attachments {
+		if rmErr := os.Remove(filepath.Join(v.attachmentDir, att.StoragePath)); rmErr != nil && !errors.Is(rmErr, os.ErrNotExist) {
+			slog.Error(outcome+" attachment cleanup failed", "user_id", userID, "item_id", itemID, "attachment_id", att.ID)
+		}
 	}
 
 	writeJSON(w, http.StatusOK, "ok")

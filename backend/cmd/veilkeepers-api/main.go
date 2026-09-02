@@ -142,6 +142,12 @@ func buildDeps(logger *slog.Logger, cfg config.Config) server.Deps {
 
 	logger.Info("database ready, migrations applied")
 
+	if err := probeAttachmentDir(cfg.AttachmentDir); err != nil {
+		_ = database.Close()
+		logger.Error("attachment directory probe failed", "err", err.Error())
+		os.Exit(1)
+	}
+
 	st := store.New(database)
 	return server.Deps{
 		DB:      database,
@@ -149,6 +155,25 @@ func buildDeps(logger *slog.Logger, cfg config.Config) server.Deps {
 		Auth:    auth.NewService(st, bcryptCost),
 		Limiter: ratelimit.New(rateLimitCapacity, rateLimitRefillPerMinute, nil),
 	}
+}
+
+// probeAttachmentDir verifies at startup that the attachment directory
+// exists and is writable by the process user, so a misconfigured bind
+// mount fails fast here instead of turning every upload into a 500. It
+// creates and immediately removes a throwaway temp file. The directory
+// path is operator configuration — not user data — so it is safe to
+// surface in the returned error.
+func probeAttachmentDir(dir string) error {
+	f, err := os.CreateTemp(dir, ".vk-probe-*")
+	if err != nil {
+		return err
+	}
+	name := f.Name()
+	if err := f.Close(); err != nil {
+		os.Remove(name)
+		return err
+	}
+	return os.Remove(name)
 }
 
 // withRetry runs op under a per-attempt timeout, up to dbMaxAttempts

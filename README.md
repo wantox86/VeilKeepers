@@ -10,6 +10,10 @@ and the Docker infrastructure that runs it.
 
 ```sh
 cp .env.example .env    # then replace every "change-me" value
+# Attachment ciphertext is stored on the host and bind-mounted into the API,
+# which runs as distroless nonroot (uid/gid 65532). The directory must be
+# owned by 65532:65532 or the API fails its startup writability probe.
+mkdir -p data/attachments && sudo chown -R 65532:65532 data/attachments
 docker compose up -d
 curl http://localhost:18080/health
 curl http://localhost:18080/ready
@@ -69,7 +73,7 @@ it can authenticate — and is accepted per spec-1 §A.1.
 │   ├── internal/server/     # HTTP mux: probes + /api/v1 routes
 │   └── Dockerfile           # Multi-stage build → distroless
 ├── infra/mysql/conf/        # MySQL server tuning (veilkeepers.cnf)
-├── data/attachments/        # Attachment storage (mounted in later sprints)
+├── data/attachments/        # Attachment ciphertext (bind-mounted into the API)
 ├── docs/                    # architecture, security, and API docs
 ├── docker-compose.yml       # MySQL 8.4 + veilkeepers-api
 └── .env.example             # Environment template (placeholders only)
@@ -79,5 +83,4 @@ it can authenticate — and is accepted per spec-1 §A.1.
 
 - Password change / vault re-wrap (`PUT /api/v1/auth/password`)
 - Vault categories and encrypted vault items
-- Attachment upload/download
 - Android client integration

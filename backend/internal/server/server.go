@@ -45,6 +45,10 @@ type apiStore interface {
 	UpdateItem(ctx context.Context, userID, itemID uint64, categoryID *uint64, payload []byte) error
 	DeleteItem(ctx context.Context, userID, itemID uint64) error
 	ListItems(ctx context.Context, userID uint64, categoryID *uint64, limit int) ([]store.VaultItem, error)
+	CreateAttachment(ctx context.Context, userID, itemID uint64, encryptedFilename []byte, mimeType string, size uint64, storagePath string) (*store.Attachment, error)
+	ListAttachments(ctx context.Context, userID, itemID uint64) ([]store.Attachment, error)
+	GetAttachment(ctx context.Context, userID, itemID, attachmentID uint64) (*store.Attachment, error)
+	DeleteAttachment(ctx context.Context, userID, itemID, attachmentID uint64) error
 }
 
 // New builds the HTTP mux for the API. Non-GET methods on known paths are
@@ -66,7 +70,8 @@ func registerAPIRoutes(mux *http.ServeMux, cfg config.Config, svc *auth.Service,
 	registerAuthRoutes(mux, cfg, svc, st, limiter)
 	registerDeviceRoutes(mux, st)
 	registerCategoryRoutes(mux, st)
-	registerVaultRoutes(mux, st)
+	registerVaultRoutes(mux, cfg, st)
+	registerAttachmentRoutes(mux, cfg, st)
 }
 
 // handleHealth is the liveness probe: always 200 if the process serves HTTP.

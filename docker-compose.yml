@@ -32,6 +32,14 @@ services:
       VK_PORT: ${VK_PORT:-8080}
       VK_DB_DSN: ${MYSQL_USER:-veilkeepers}:${MYSQL_PASSWORD:-change-me-app}@tcp(veilkeepers-mysql:3306)/${MYSQL_DATABASE:-veilkeepers}
       REGISTRATION_OPEN: ${REGISTRATION_OPEN:-true}
+      VK_ATTACHMENT_DIR: ${VK_ATTACHMENT_DIR:-/data/attachments}
+      VK_ATTACHMENT_MAX_BYTES: ${VK_ATTACHMENT_MAX_BYTES:-10485760}
+    # Attachment ciphertext lives on the host filesystem, never in MySQL.
+    # The container runs as distroless nonroot (uid/gid 65532), so the host
+    # directory must be owned by 65532:65532 or startup fails the probe:
+    #   mkdir -p ./data/attachments && sudo chown -R 65532:65532 ./data/attachments
+    volumes:
+      - ./data/attachments:/data/attachments
     healthcheck:
       test: ["CMD", "/veilkeepers-api", "-healthcheck"]
       interval: 10s

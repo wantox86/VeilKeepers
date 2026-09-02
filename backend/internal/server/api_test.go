@@ -40,10 +40,11 @@ func b64Of(b []byte) string { return base64.StdEncoding.EncodeToString(b) }
 
 // testEnv wires the API routes over a fakeStore with bcrypt cost 4.
 type testEnv struct {
-	t       *testing.T
-	mux     *http.ServeMux
-	fs      *fakeStore
-	limiter *ratelimit.Limiter
+	t             *testing.T
+	mux           *http.ServeMux
+	fs            *fakeStore
+	limiter       *ratelimit.Limiter
+	attachmentDir string
 }
 
 func newTestEnv(t *testing.T, registrationOpen bool, limiter *ratelimit.Limiter) *testEnv {
@@ -53,12 +54,21 @@ func newTestEnv(t *testing.T, registrationOpen bool, limiter *ratelimit.Limiter)
 	if limiter == nil {
 		limiter = ratelimit.New(10000, 0, nil)
 	}
-	cfg := config.Config{Port: "8080", RegistrationOpen: registrationOpen}
+	// Attachments write ciphertext under a per-test temp dir and enforce
+	// the real spec-1 §B.6 ceiling (10 MiB) so the boundary test below
+	// exercises the production limit.
+	attachmentDir := t.TempDir()
+	cfg := config.Config{
+		Port:               "8080",
+		RegistrationOpen:   registrationOpen,
+		AttachmentDir:      attachmentDir,
+		AttachmentMaxBytes: 10 << 20,
+	}
 
 	mux := http.NewServeMux()
 	registerAPIRoutes(mux, cfg, auth.NewService(fs, bcrypt.MinCost), fs, limiter)
 
-	return &testEnv{t: t, mux: mux, fs: fs, limiter: limiter}
+	return &testEnv{t: t, mux: mux, fs: fs, limiter: limiter, attachmentDir: attachmentDir}
 }
 
 // do issues a request against the mux, attaching a bearer token when set.

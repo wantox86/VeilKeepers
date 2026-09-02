@@ -16,13 +16,14 @@ import (
 // handler and middleware tests. Username uniqueness is case-insensitive,
 // mirroring the database collation.
 type fakeStore struct {
-	mu         sync.Mutex
-	users      map[string]*fakeUser // keyed by lowercase username
-	devices    map[uint64]*store.Device
-	sessions   map[uint64]*fakeSession
-	categories map[uint64]*fakeCategory
-	items      map[uint64]*fakeItem
-	nextID     uint64
+	mu          sync.Mutex
+	users       map[string]*fakeUser // keyed by lowercase username
+	devices     map[uint64]*store.Device
+	sessions    map[uint64]*fakeSession
+	categories  map[uint64]*fakeCategory
+	items       map[uint64]*fakeItem
+	attachments map[uint64]*fakeAttachment
+	nextID      uint64
 }
 
 type fakeUser struct {
@@ -62,14 +63,26 @@ type fakeItem struct {
 	updatedAt time.Time
 }
 
+type fakeAttachment struct {
+	id                uint64
+	userID            uint64
+	vaultItemID       uint64
+	encryptedFilename []byte
+	mimeType          string
+	size              uint64
+	storagePath       string
+	createdAt         time.Time
+}
+
 func newFakeStore() *fakeStore {
 	return &fakeStore{
-		users:      make(map[string]*fakeUser),
-		devices:    make(map[uint64]*store.Device),
-		sessions:   make(map[uint64]*fakeSession),
-		categories: make(map[uint64]*fakeCategory),
-		items:      make(map[uint64]*fakeItem),
-		nextID:     1,
+		users:       make(map[string]*fakeUser),
+		devices:     make(map[uint64]*store.Device),
+		sessions:    make(map[uint64]*fakeSession),
+		categories:  make(map[uint64]*fakeCategory),
+		items:       make(map[uint64]*fakeItem),
+		attachments: make(map[uint64]*fakeAttachment),
+		nextID:      1,
 	}
 }
 
@@ -471,6 +484,13 @@ func (f *fakeStore) DeleteItem(_ context.Context, userID, itemID uint64) error {
 		return store.ErrNotFound
 	}
 	delete(f.items, itemID)
+	// Mimic the attachments FK ON DELETE CASCADE: the item's attachment
+	// rows disappear with it. (The handler removes the ciphertext files.)
+	for id, a := range f.attachments {
+		if a.vaultItemID == itemID && a.userID == userID {
+			delete(f.attachments, id)
+		}
+	}
 	return nil
 }
 
@@ -502,6 +522,104 @@ func (f *fakeStore) ListItems(_ context.Context, userID uint64, categoryID *uint
 		out = out[:limit]
 	}
 	return out, nil
+}
+
+// CreateAttachment implements apiStore, rejecting references to items
+// owned by other users (anti FK-planting), mirroring the store's FOR
+// UPDATE ownership check.
+func (f *fakeStore) CreateAttachment(_ context.Context, userID, itemID uint64, encryptedFilename []byte, mimeType string, size uint64, storagePath string) (*store.Attachment, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	if it, ok := f.items[itemID]; !ok || it.userID != userID {
+		return nil, store.ErrNotFound
+	}
+
+	a := &fakeAttachment{
+		id:                f.allocID(),
+		userID:            userID,
+		vaultItemID:       itemID,
+		encryptedFilename: append([]byte(nil), encryptedFilename...),
+		mimeType:          mimeType,
+		size:              size,
+		storagePath:       storagePath,
+		createdAt:         time.Now().UTC(),
+	}
+	f.attachments[a.id] = a
+	return f.attachmentLocked(a), nil
+}
+
+// attachmentLocked builds a store.Attachment copy; caller holds f.mu.
+func (f *fakeStore) attachmentLocked(a *fakeAttachment) *store.Attachment {
+	return &store.Attachment{
+		ID:                a.id,
+		UserID:            a.userID,
+		VaultItemID:       a.vaultItemID,
+		EncryptedFilename: append([]byte(nil), a.encryptedFilename...),
+		MimeType:          a.mimeType,
+		Size:              a.size,
+		StoragePath:       a.storagePath,
+		CreatedAt:         a.createdAt,
+	}
+}
+
+// ListAttachments implements apiStore, mirroring the item-ownership
+// precheck and the SQL ORDER BY created_at DESC, id DESC.
+func (f *fakeStore) ListAttachments(_ context.Context, userID, itemID uint64) ([]store.Attachment, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	if it, ok := f.items[itemID]; !ok || it.userID != userID {
+		return nil, store.ErrNotFound
+	}
+
+	out := make([]store.Attachment, 0)
+	for _, a := range f.attachments {
+		if a.userID == userID && a.vaultItemID == itemID {
+			out = append(out, *f.attachmentLocked(a))
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if !out[i].CreatedAt.Equal(out[j].CreatedAt) {
+			return out[i].CreatedAt.After(out[j].CreatedAt)
+		}
+		return out[i].ID > out[j].ID
+	})
+	return out, nil
+}
+
+// GetAttachment implements apiStore.
+func (f *fakeStore) GetAttachment(_ context.Context, userID, itemID, attachmentID uint64) (*store.Attachment, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	a, ok := f.attachments[attachmentID]
+	if !ok || a.userID != userID || a.vaultItemID != itemID {
+		return nil, store.ErrNotFound
+	}
+	return f.attachmentLocked(a), nil
+}
+
+// DeleteAttachment implements apiStore.
+func (f *fakeStore) DeleteAttachment(_ context.Context, userID, itemID, attachmentID uint64) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	a, ok := f.attachments[attachmentID]
+	if !ok || a.userID != userID || a.vaultItemID != itemID {
+		return store.ErrNotFound
+	}
+	delete(f.attachments, attachmentID)
+	return nil
+}
+
+// attachmentCount reports how many attachment rows the fake holds across
+// every item; used by the item-delete cascade test to assert the rows are
+// gone (the handler separately removes the files from disk).
+func (f *fakeStore) attachmentCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.attachments)
 }
 
 // expireAllSessions force-expires every session; used to test the
