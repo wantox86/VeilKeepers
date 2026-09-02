@@ -1,5 +1,9 @@
 package com.veilkeepers.app.ui
 
+import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -56,6 +60,7 @@ fun ItemEditScreen(
     initialCategoryId: Long?,
     onCancel: () -> Unit,
     onSave: (categoryId: Long?, title: String, notes: String, fields: List<VaultField>) -> Unit,
+    onAddImage: ((Uri) -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     val editable = existing?.takeIf { !it.undecryptable }
@@ -67,6 +72,16 @@ fun ItemEditScreen(
         mutableStateListOf<FieldDraft>().apply {
             editable?.fields?.forEach { add(FieldDraft(it.label, it.value, it.isSecret)) }
         }
+    }
+
+    // Sprint 8: photo picker (Photo Picker, image-only). Only wired for an
+    // EXISTING, decryptable item — a not-yet-created item has no id to attach
+    // to. The chosen Uri is handed up; reading/compression/encryption happen
+    // off the composition in the caller.
+    val pickImage = rememberLauncherForActivityResult(
+        ActivityResultContracts.PickVisualMedia(),
+    ) { uri ->
+        if (uri != null) onAddImage?.invoke(uri)
     }
 
     val selectedName = categories.firstOrNull { it.id == selectedCategoryId }?.name
@@ -190,6 +205,31 @@ fun ItemEditScreen(
                     minLines = 4,
                     modifier = Modifier.fillMaxWidth(),
                 )
+
+                // Sprint 8: attachments can only be added to an EXISTING item.
+                if (onAddImage != null && editable != null) {
+                    Spacer(Modifier.height(16.dp))
+                    SectionLabel("Attachments")
+                    Spacer(Modifier.height(8.dp))
+                    OutlinedButton(
+                        onClick = {
+                            pickImage.launch(
+                                PickVisualMediaRequest(
+                                    ActivityResultContracts.PickVisualMedia.ImageOnly,
+                                ),
+                            )
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text("+ Add image")
+                    }
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        text = "JPEG, PNG, WebP or GIF up to 10 MB. Uploaded encrypted.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
 
             Spacer(Modifier.height(16.dp))

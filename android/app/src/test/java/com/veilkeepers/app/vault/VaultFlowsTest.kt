@@ -6,6 +6,7 @@ import com.veilkeepers.app.crypto.KdfParams
 import com.veilkeepers.app.crypto.PayloadCipher
 import com.veilkeepers.app.crypto.VaultKey
 import com.veilkeepers.app.data.ApiError
+import com.veilkeepers.app.data.AttachmentEntry
 import com.veilkeepers.app.data.AuthApi
 import com.veilkeepers.app.data.CategoryEntry
 import com.veilkeepers.app.data.CategoryListResult
@@ -15,6 +16,7 @@ import com.veilkeepers.app.data.KdfInfo
 import com.veilkeepers.app.data.LoginResult
 import com.veilkeepers.app.data.SessionStorage
 import com.veilkeepers.app.data.VaultApi
+import com.veilkeepers.app.data.VaultPayloads
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
@@ -44,11 +46,20 @@ private class FakeVaultApi : VaultApi {
     // assertions) — the fake itself stays private-in-file.
     class StoredCategory(var encryptedNameB64: String, var updatedAt: String)
     class StoredItem(var categoryId: Long?, var encryptedPayloadB64: String, var updatedAt: String)
+    class StoredAttachment(
+        val itemId: Long,
+        val encryptedFilenameB64: String,
+        val mimeType: String,
+        val ciphertext: ByteArray,
+        val createdAt: String,
+    )
 
     private val categories = LinkedHashMap<Long, StoredCategory>()
     private val items = LinkedHashMap<Long, StoredItem>()
+    private val attachments = LinkedHashMap<Long, StoredAttachment>()
     private var nextCategoryId = 1L
     private var nextItemId = 1L
+    private var nextAttachmentId = 1L
     private var tick = 0
 
     /** Records the verb of every successful call, in order. */
@@ -152,6 +163,57 @@ private class FakeVaultApi : VaultApi {
     override suspend fun deleteItem(id: Long) {
         checkFailure("deleteItem")
         items.remove(id) ?: throw ApiError.NotFound
+        // Backend FK ON DELETE CASCADE: the item's attachments go with it.
+        attachments.entries.filter { it.value.itemId == id }.map { it.key }
+            .forEach { attachments.remove(it) }
+    }
+
+    override suspend fun listAttachments(itemId: Long): List<AttachmentEntry> {
+        checkFailure("listAttachments")
+        if (!items.containsKey(itemId)) throw ApiError.NotFound
+        return attachments.entries
+            .filter { it.value.itemId == itemId }
+            .sortedByDescending { it.value.createdAt }
+            .map { (id, a) ->
+                AttachmentEntry(
+                    id = id,
+                    vaultItemId = a.itemId,
+                    encryptedFilenameB64 = a.encryptedFilenameB64,
+                    mimeType = a.mimeType,
+                    size = a.ciphertext.size.toLong(),
+                    createdAt = a.createdAt,
+                )
+            }
+    }
+
+    override suspend fun uploadAttachment(
+        itemId: Long,
+        mimeType: String,
+        encryptedFilenameB64Url: String,
+        ciphertext: ByteArray,
+    ): AttachmentEntry {
+        checkFailure("uploadAttachment")
+        if (!items.containsKey(itemId)) throw ApiError.NotFound
+        val id = nextAttachmentId++
+        val now = timestamp()
+        // The DTO carries the filename in STANDARD base64; the upload used base64url.
+        val encFilenameB64 = AuthHash.toBase64(VaultPayloads.fromBase64Url(encryptedFilenameB64Url))
+        attachments[id] = StoredAttachment(itemId, encFilenameB64, mimeType, ciphertext, now)
+        return AttachmentEntry(id, itemId, encFilenameB64, mimeType, ciphertext.size.toLong(), now)
+    }
+
+    override suspend fun downloadAttachment(itemId: Long, attachmentId: Long): ByteArray {
+        checkFailure("downloadAttachment")
+        val a = attachments[attachmentId] ?: throw ApiError.NotFound
+        if (a.itemId != itemId) throw ApiError.NotFound
+        return a.ciphertext
+    }
+
+    override suspend fun deleteAttachment(itemId: Long, attachmentId: Long) {
+        checkFailure("deleteAttachment")
+        val a = attachments[attachmentId] ?: throw ApiError.NotFound
+        if (a.itemId != itemId) throw ApiError.NotFound
+        attachments.remove(attachmentId)
     }
 
     private fun checkFailure(verb: String) {

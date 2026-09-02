@@ -39,6 +39,23 @@ object PayloadCipher {
     const val MAX_PAYLOAD_BYTES = 1024 * 1024
 
     /**
+     * Ceiling for an encrypted attachment (backend VK_ATTACHMENT_MAX_BYTES,
+     * spec-1.md §B.6: 10 MiB). The bound applies to the CIPHERTEXT the server
+     * stores, so the accepted plaintext maximum is this minus
+     * [CIPHER_OVERHEAD_BYTES] — the client check mirrors the server's
+     * MaxBytesReader so an oversized file is rejected before any upload.
+     */
+    const val MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024
+
+    /**
+     * Decoded-size ceiling for an encrypted attachment filename
+     * (backend encrypted_filename VARBINARY(255)). Like the category name,
+     * the bound applies to the CIPHERTEXT, so the accepted plaintext maximum
+     * is [MAX_FILENAME_BYTES] − [CIPHER_OVERHEAD_BYTES].
+     */
+    const val MAX_FILENAME_BYTES = 255
+
+    /**
      * Encrypts [plaintext] under [vk] with AES-256-GCM and a fresh random
      * nonce. Returns `nonce || ciphertext(+tag)`.
      */
@@ -101,6 +118,53 @@ object PayloadCipher {
         }
         return encrypt(bytes, vk)
     }
+
+    /**
+     * Encrypts an attachment's [plaintext] bytes under [vk], enforcing the
+     * backend's decoded ≤ [MAX_ATTACHMENT_BYTES] bound BEFORE any upload. The
+     * bound applies to the CIPHERTEXT (nonce + tag included), so the accepted
+     * plaintext maximum is [MAX_ATTACHMENT_BYTES] − [CIPHER_OVERHEAD_BYTES];
+     * checking the plaintext alone would fail server-side in that 28-byte gap.
+     */
+    fun encryptAttachment(plaintext: ByteArray, vk: ByteArray): ByteArray {
+        require(plaintext.isNotEmpty()) { "attachment must not be empty" }
+        require(plaintext.size + CIPHER_OVERHEAD_BYTES <= MAX_ATTACHMENT_BYTES) {
+            "attachment is too large: it must fit in " +
+                "${MAX_ATTACHMENT_BYTES - CIPHER_OVERHEAD_BYTES} bytes before encryption"
+        }
+        return encrypt(plaintext, vk)
+    }
+
+    /**
+     * Decrypts an attachment ciphertext produced by [encryptAttachment].
+     * Semantically identical to [decrypt]; the distinct name keeps attachment
+     * call sites self-documenting.
+     */
+    fun decryptAttachment(blob: ByteArray, vk: ByteArray): ByteArray = decrypt(blob, vk)
+
+    /**
+     * Encrypts an attachment [filename], enforcing the backend's decoded
+     * ≤ [MAX_FILENAME_BYTES] bound BEFORE any upload. The resulting ciphertext
+     * is at least [CIPHER_OVERHEAD_BYTES] + 1 bytes (the backend's minimum of
+     * 29), so a non-empty name always satisfies the server's lower bound.
+     */
+    fun encryptFilename(filename: String, vk: ByteArray): ByteArray {
+        val bytes = filename.toByteArray(Charsets.UTF_8)
+        require(bytes.isNotEmpty()) { "attachment filename must not be empty" }
+        require(bytes.size + CIPHER_OVERHEAD_BYTES <= MAX_FILENAME_BYTES) {
+            "attachment filename is too long: it must fit in " +
+                "${MAX_FILENAME_BYTES - CIPHER_OVERHEAD_BYTES} bytes before encryption"
+        }
+        return encrypt(bytes, vk)
+    }
+
+    /**
+     * Decrypts an attachment filename produced by [encryptFilename].
+     *
+     * @throws GeneralSecurityException when the blob fails GCM authentication
+     * (wrong VK, tampering); callers degrade to a static marker, never crash.
+     */
+    fun decryptFilename(blob: ByteArray, vk: ByteArray): String = decryptToString(blob, vk)
 
     private fun gcm(mode: Int, vk: ByteArray, nonce: ByteArray): Cipher {
         require(vk.size == KEY_BYTES) { "vault key must be $KEY_BYTES bytes" }

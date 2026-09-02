@@ -2,6 +2,7 @@ package com.veilkeepers.app
 
 import android.app.Activity
 import android.app.Application
+import android.net.Uri
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -29,6 +30,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -60,9 +62,13 @@ import com.veilkeepers.app.ui.UnlockScreen
 import com.veilkeepers.app.ui.VaultHomeScreen
 import com.veilkeepers.app.vault.VaultUiState
 import com.veilkeepers.app.vault.VaultViewModel
+import com.veilkeepers.app.vault.attach.AttachmentViewModel
+import com.veilkeepers.app.vault.attach.ImageCompressor
 import com.veilkeepers.app.vault.search.SearchViewModel
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.launch
 
 /**
  * Root activity: a state-driven switcher (Login / Register / Unlock / Vault) —
@@ -406,9 +412,18 @@ private fun VaultRoot(
         viewModelStoreOwner = vaultStoreOwner,
         factory = SearchViewModel.factory(viewModel.uiState),
     )
+    // Sprint 8 attachments: same generation-keyed store (cleared on every
+    // unlock), a dedicated repository built from the SAME in-memory VK.
+    val attachmentViewModel: AttachmentViewModel = viewModel(
+        key = "vault-attachments-$unlockGeneration",
+        viewModelStoreOwner = vaultStoreOwner,
+        factory = AttachmentViewModel.factory(vaultKey, storage),
+    )
+    val scope = rememberCoroutineScope()
     val state by viewModel.uiState.collectAsState()
     val searchQuery by searchViewModel.rawQuery.collectAsState()
     val searchState by searchViewModel.searchState.collectAsState()
+    val attachmentState by attachmentViewModel.uiState.collectAsState()
     // Capture once: a delegated property cannot be smart-cast after `is`.
     val s = state
 
@@ -521,6 +536,11 @@ private fun VaultRoot(
                         // Deleted meanwhile — fall back without crashing.
                         LaunchedEffect(Unit) { screen = returnScreen }
                     } else {
+                        // Load this item's attachment metadata on entry (list
+                        // only — bytes are fetched on demand per Preview tap).
+                        LaunchedEffect(detailItemId) {
+                            detailItemId?.let { attachmentViewModel.refresh(it) }
+                        }
                         ItemDetailScreen(
                             item = item,
                             categoryName = loaded.categories
@@ -536,6 +556,16 @@ private fun VaultRoot(
                             onDelete = { id ->
                                 viewModel.deleteItem(id)
                                 screen = returnScreen
+                            },
+                            attachments = attachmentState,
+                            onPreviewAttachment = { attachmentId, mimeType ->
+                                detailItemId?.let {
+                                    attachmentViewModel.openPreview(it, attachmentId, mimeType)
+                                }
+                            },
+                            onCloseAttachmentPreview = attachmentViewModel::closePreview,
+                            onDeleteAttachment = { attachmentId ->
+                                detailItemId?.let { attachmentViewModel.delete(it, attachmentId) }
                             },
                         )
                     }
@@ -557,6 +587,27 @@ private fun VaultRoot(
                             // the user re-taps explicitly (no auto-retries:
                             // POST is non-idempotent).
                             screen = returnScreen
+                        },
+                        // Sprint 8: attachments only on an EXISTING item. Read
+                        // + validate + compress off the main thread, encrypt &
+                        // upload via the VM, then show the item's detail.
+                        onAddImage = editItemId?.let { id ->
+                            { uri: Uri ->
+                                scope.launch(Dispatchers.IO) {
+                                    val prepared = ImageCompressor.prepare(activity, uri)
+                                    if (prepared != null) {
+                                        attachmentViewModel.upload(
+                                            id,
+                                            prepared.filename,
+                                            prepared.mimeType,
+                                            prepared.bytes,
+                                        )
+                                    }
+                                }
+                                detailItemId = id
+                                returnScreen = VaultScreen.ITEM_DETAIL
+                                screen = VaultScreen.ITEM_DETAIL
+                            }
                         },
                     )
                 }

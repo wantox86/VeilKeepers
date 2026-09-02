@@ -4,6 +4,7 @@ import com.veilkeepers.app.auth.AuthRepository
 import com.veilkeepers.app.crypto.KdfParams
 import com.veilkeepers.app.crypto.VaultKey
 import com.veilkeepers.app.data.ApiError
+import com.veilkeepers.app.data.AttachmentEntry
 import com.veilkeepers.app.data.AuthApi
 import com.veilkeepers.app.data.CategoryEntry
 import com.veilkeepers.app.data.CategoryListResult
@@ -94,6 +95,22 @@ private class SearchRecordingVaultApi : VaultApi {
         guarded("updateItem") { }
 
     override suspend fun deleteItem(id: Long) = guarded("deleteItem") { }
+
+    override suspend fun listAttachments(itemId: Long): List<AttachmentEntry> =
+        guarded("listAttachments") { emptyList() }
+
+    override suspend fun uploadAttachment(
+        itemId: Long,
+        mimeType: String,
+        encryptedFilenameB64Url: String,
+        ciphertext: ByteArray,
+    ): AttachmentEntry = guarded("uploadAttachment") { throw ApiError.Internal }
+
+    override suspend fun downloadAttachment(itemId: Long, attachmentId: Long): ByteArray =
+        guarded("downloadAttachment") { throw ApiError.Internal }
+
+    override suspend fun deleteAttachment(itemId: Long, attachmentId: Long) =
+        guarded("deleteAttachment") { }
 
     private fun <T> guarded(verb: String, block: () -> T): T {
         if (armed) {

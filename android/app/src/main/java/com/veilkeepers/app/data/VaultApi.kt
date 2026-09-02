@@ -5,6 +5,8 @@ import com.veilkeepers.app.crypto.PayloadCipher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
+import java.net.URLEncoder
+import java.util.Base64
 
 /** Wire DTO: one category entry exactly as the backend returns it. */
 data class CategoryEntry(
@@ -25,6 +27,23 @@ data class ItemEntry(
     val encryptedPayloadB64: String,
     val createdAt: String,
     val updatedAt: String,
+)
+
+/**
+ * Wire DTO: one attachment exactly as the backend returns it
+ * (docs/api/vault.md §Attachments). [encryptedFilenameB64] is the opaque
+ * client-encrypted filename in standard base64 (the upload query form is
+ * base64url; the DTO form is standard). [size] is the CIPHERTEXT byte length
+ * stored on the server, so the plaintext length is size −
+ * [com.veilkeepers.app.crypto.PayloadCipher.CIPHER_OVERHEAD_BYTES].
+ */
+data class AttachmentEntry(
+    val id: Long,
+    val vaultItemId: Long,
+    val encryptedFilenameB64: String,
+    val mimeType: String,
+    val size: Long,
+    val createdAt: String,
 )
 
 /** GET /api/v1/categories page (≤200) + warning-only overflow flag. */
@@ -66,6 +85,30 @@ interface VaultApi {
 
     /** DELETE /api/v1/vault/items/{id} → {"status":"ok"}. */
     suspend fun deleteItem(id: Long)
+
+    /** GET /api/v1/vault/items/{id}/attachments → the item's attachments. */
+    suspend fun listAttachments(itemId: Long): List<AttachmentEntry>
+
+    /**
+     * POST /api/v1/vault/items/{id}/attachments with the raw [ciphertext] as
+     * the octet-stream body; [mimeType] and the base64url [encryptedFilenameB64Url]
+     * ride in the query string → 201 with the created attachment DTO.
+     */
+    suspend fun uploadAttachment(
+        itemId: Long,
+        mimeType: String,
+        encryptedFilenameB64Url: String,
+        ciphertext: ByteArray,
+    ): AttachmentEntry
+
+    /**
+     * GET /api/v1/vault/items/{id}/attachments/{attachmentId} → the raw
+     * ciphertext bytes for client-side decryption.
+     */
+    suspend fun downloadAttachment(itemId: Long, attachmentId: Long): ByteArray
+
+    /** DELETE /api/v1/vault/items/{id}/attachments/{attachmentId} → {"status":"ok"}. */
+    suspend fun deleteAttachment(itemId: Long, attachmentId: Long)
 }
 
 /**
@@ -78,6 +121,20 @@ interface VaultApi {
 object VaultPayloads {
     /** Category create/update request body ceiling (backend maxCategoryBodyBytes). */
     const val MAX_CATEGORY_BODY_BYTES = 4096
+
+    /**
+     * Attachment MIME whitelist (spec-1.md §B.6), mirroring the backend's
+     * allowedAttachmentMIMEs. Enforced client-side BEFORE upload so an
+     * unsupported type fails with a display-ready error, not a server 400.
+     */
+    val ALLOWED_ATTACHMENT_MIMES = setOf("image/jpeg", "image/png", "image/webp", "image/gif")
+
+    /**
+     * Decoded encrypted-filename bounds, mirroring the backend's
+     * minEncryptedFilenameBytes (overhead + 1) and the VARBINARY(255) column.
+     */
+    const val MIN_ENCRYPTED_FILENAME_BYTES = 29
+    const val MAX_ENCRYPTED_FILENAME_BYTES = 255
 
     /** POST/PUT category body: {"encrypted_name": base64}. */
     fun categoryBody(encryptedNameB64: String): JSONObject {
@@ -145,6 +202,75 @@ object VaultPayloads {
     /** PUT/DELETE answers exactly {"status":"ok"}; anything else is broken. */
     fun parseStatusOk(json: JSONObject) {
         if (json.optString("status", "") != "ok") throw ApiError.Internal
+    }
+
+    /** base64url without padding — the upload query-param alphabet (Go RawURLEncoding). */
+    fun toBase64Url(bytes: ByteArray): String =
+        Base64.getUrlEncoder().withoutPadding().encodeToString(bytes)
+
+    /** Decodes base64url (padding optional); throws [IllegalArgumentException] if invalid. */
+    fun fromBase64Url(encoded: String): ByteArray = Base64.getUrlDecoder().decode(encoded)
+
+    /**
+     * POST /api/v1/vault/items/{id}/attachments request path. [mimeType] and
+     * the base64url [encryptedFilenameB64Url] are percent-encoded into the
+     * query string (the mime's `/` MUST be escaped). Extracted so the encoding
+     * is testable without a live connection.
+     */
+    fun attachmentUploadPath(itemId: Long, mimeType: String, encryptedFilenameB64Url: String): String {
+        val mime = URLEncoder.encode(mimeType, "UTF-8")
+        val filename = URLEncoder.encode(encryptedFilenameB64Url, "UTF-8")
+        return "/api/v1/vault/items/$itemId/attachments?mime_type=$mime&encrypted_filename=$filename"
+    }
+
+    /**
+     * Client-side attachment pre-checks, run BEFORE any upload so limits fail
+     * with a display-ready error instead of a server 400 (spec-1.md §B.6,
+     * two-sided enforcement). Validates the MIME whitelist, the ciphertext
+     * size (≤ [PayloadCipher.MAX_ATTACHMENT_BYTES]), and the base64url
+     * encrypted filename's decoded length (29..255 bytes).
+     */
+    fun requireAttachmentBounds(
+        mimeType: String,
+        ciphertext: ByteArray,
+        encryptedFilenameB64Url: String,
+    ) {
+        if (mimeType !in ALLOWED_ATTACHMENT_MIMES) {
+            throw IllegalArgumentException("Unsupported attachment type: only images are allowed.")
+        }
+        if (ciphertext.isEmpty()) {
+            throw IllegalArgumentException("Attachment must not be empty.")
+        }
+        if (ciphertext.size > PayloadCipher.MAX_ATTACHMENT_BYTES) {
+            throw IllegalArgumentException(
+                "Attachment exceeds the ${PayloadCipher.MAX_ATTACHMENT_BYTES}-byte limit."
+            )
+        }
+        val decoded = try {
+            fromBase64Url(encryptedFilenameB64Url)
+        } catch (e: IllegalArgumentException) {
+            throw IllegalArgumentException("Attachment filename is not valid base64url.")
+        }
+        if (decoded.size < MIN_ENCRYPTED_FILENAME_BYTES || decoded.size > MAX_ENCRYPTED_FILENAME_BYTES) {
+            throw IllegalArgumentException(
+                "Encrypted attachment filename must be " +
+                    "$MIN_ENCRYPTED_FILENAME_BYTES..$MAX_ENCRYPTED_FILENAME_BYTES bytes."
+            )
+        }
+    }
+
+    fun parseAttachment(json: JSONObject): AttachmentEntry = AttachmentEntry(
+        id = json.getLong("id"),
+        vaultItemId = json.getLong("vault_item_id"),
+        encryptedFilenameB64 = json.optString("encrypted_filename", ""),
+        mimeType = json.optString("mime_type", ""),
+        size = json.optLong("size", 0),
+        createdAt = json.optString("created_at", ""),
+    )
+
+    fun parseAttachmentList(json: JSONObject): List<AttachmentEntry> {
+        val arr = json.optJSONArray("attachments") ?: throw ApiError.Internal
+        return (0 until arr.length()).map { parseAttachment(arr.getJSONObject(it)) }
     }
 
     private fun requireDecodedBounds(b64: String, maxBytes: Int, what: String) {
@@ -233,6 +359,50 @@ class HttpVaultApi(private val client: ApiClient, private val bearerToken: Strin
     override suspend fun deleteItem(id: Long) {
         withContext(Dispatchers.IO) {
             VaultPayloads.parseStatusOk(client.deleteJson("/api/v1/vault/items/$id", bearerToken))
+        }
+    }
+
+    override suspend fun listAttachments(itemId: Long): List<AttachmentEntry> =
+        withContext(Dispatchers.IO) {
+            VaultPayloads.parseAttachmentList(
+                client.getJson("/api/v1/vault/items/$itemId/attachments", bearerToken)
+            )
+        }
+
+    override suspend fun uploadAttachment(
+        itemId: Long,
+        mimeType: String,
+        encryptedFilenameB64Url: String,
+        ciphertext: ByteArray,
+    ): AttachmentEntry = withContext(Dispatchers.IO) {
+        // Pre-check limits before the body is written, so an oversized or
+        // non-whitelisted upload fails locally with a display-ready error.
+        VaultPayloads.requireAttachmentBounds(mimeType, ciphertext, encryptedFilenameB64Url)
+        VaultPayloads.parseAttachment(
+            client.postBinary(
+                VaultPayloads.attachmentUploadPath(itemId, mimeType, encryptedFilenameB64Url),
+                ciphertext,
+                bearerToken,
+            )
+        )
+    }
+
+    override suspend fun downloadAttachment(itemId: Long, attachmentId: Long): ByteArray =
+        withContext(Dispatchers.IO) {
+            client.getBinary(
+                "/api/v1/vault/items/$itemId/attachments/$attachmentId",
+                bearerToken,
+            )
+        }
+
+    override suspend fun deleteAttachment(itemId: Long, attachmentId: Long) {
+        withContext(Dispatchers.IO) {
+            VaultPayloads.parseStatusOk(
+                client.deleteJson(
+                    "/api/v1/vault/items/$itemId/attachments/$attachmentId",
+                    bearerToken,
+                )
+            )
         }
     }
 

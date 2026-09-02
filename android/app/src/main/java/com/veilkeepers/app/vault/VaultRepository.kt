@@ -4,10 +4,12 @@ import com.veilkeepers.app.auth.AuthRepository
 import com.veilkeepers.app.crypto.AuthHash
 import com.veilkeepers.app.crypto.PayloadCipher
 import com.veilkeepers.app.data.ApiClient
+import com.veilkeepers.app.data.AttachmentEntry
 import com.veilkeepers.app.data.CategoryEntry
 import com.veilkeepers.app.data.HttpVaultApi
 import com.veilkeepers.app.data.ItemEntry
 import com.veilkeepers.app.data.VaultApi
+import com.veilkeepers.app.data.VaultPayloads
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
@@ -132,6 +134,51 @@ class VaultRepository(
     }
 
     /**
+     * Fetches an item's attachments and decrypts each filename with the
+     * in-memory VK. A filename that fails GCM auth degrades to
+     * [UNDECRYPTABLE] (never crashes, never surfaces the blob).
+     */
+    suspend fun listAttachments(itemId: Long): List<AttachmentMeta> {
+        val entries = api.listAttachments(itemId)
+        return withContext(Dispatchers.Default) { entries.map { decryptAttachmentMeta(it) } }
+    }
+
+    /**
+     * Encrypts the attachment [plaintext] and its [filename] under the VK and
+     * uploads them to [itemId], returning the decrypted view of the 201 DTO.
+     * The MIME whitelist and the ciphertext/filename size bounds are enforced
+     * in the API layer BEFORE any bytes reach the wire.
+     */
+    suspend fun uploadAttachment(
+        itemId: Long,
+        filename: String,
+        mimeType: String,
+        plaintext: ByteArray,
+    ): AttachmentMeta {
+        val ciphertext = withContext(Dispatchers.Default) {
+            PayloadCipher.encryptAttachment(plaintext, vaultKey)
+        }
+        val encryptedFilenameB64Url = withContext(Dispatchers.Default) {
+            VaultPayloads.toBase64Url(PayloadCipher.encryptFilename(filename, vaultKey))
+        }
+        val entry = api.uploadAttachment(itemId, mimeType, encryptedFilenameB64Url, ciphertext)
+        return withContext(Dispatchers.Default) { decryptAttachmentMeta(entry) }
+    }
+
+    /** Downloads an attachment's ciphertext and decrypts it to plaintext bytes. */
+    suspend fun downloadAttachment(itemId: Long, attachmentId: Long): ByteArray {
+        val ciphertext = api.downloadAttachment(itemId, attachmentId)
+        return withContext(Dispatchers.Default) {
+            PayloadCipher.decryptAttachment(ciphertext, vaultKey)
+        }
+    }
+
+    /** DELETEs an attachment; the server also removes its ciphertext file. */
+    suspend fun deleteAttachment(itemId: Long, attachmentId: Long) {
+        api.deleteAttachment(itemId, attachmentId)
+    }
+
+    /**
      * Zeroizes the in-memory VK. Idempotent. Called on EVERY terminal path
      * (lock & sign out, auto-lock, AND session-expired) so the plaintext VK
      * never outlives the session, regardless of how the vault was exited.
@@ -214,6 +261,26 @@ class VaultRepository(
                 updatedAt = entry.updatedAt,
             )
         }
+    }
+
+    private fun decryptAttachmentMeta(entry: AttachmentEntry): AttachmentMeta {
+        val filename = try {
+            PayloadCipher.decryptFilename(
+                AuthHash.fromBase64(entry.encryptedFilenameB64),
+                vaultKey,
+            )
+        } catch (e: Exception) {
+            // Never crash, never log, never expose the blob: static marker only.
+            UNDECRYPTABLE
+        }
+        return AttachmentMeta(
+            id = entry.id,
+            itemId = entry.vaultItemId,
+            filename = filename,
+            mimeType = entry.mimeType,
+            size = entry.size,
+            createdAt = entry.createdAt,
+        )
     }
 
     companion object {

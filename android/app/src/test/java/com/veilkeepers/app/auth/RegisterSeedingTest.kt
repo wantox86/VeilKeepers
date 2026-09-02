@@ -4,6 +4,7 @@ import com.veilkeepers.app.crypto.AuthHash
 import com.veilkeepers.app.crypto.KdfParams
 import com.veilkeepers.app.crypto.PayloadCipher
 import com.veilkeepers.app.data.ApiError
+import com.veilkeepers.app.data.AttachmentEntry
 import com.veilkeepers.app.data.AuthApi
 import com.veilkeepers.app.data.CategoryEntry
 import com.veilkeepers.app.data.CategoryListResult
@@ -89,6 +90,22 @@ private class SeedingVaultApi : VaultApi {
         throw UnsupportedOperationException()
 
     override suspend fun deleteItem(id: Long) = throw UnsupportedOperationException()
+
+    override suspend fun listAttachments(itemId: Long): List<AttachmentEntry> =
+        throw UnsupportedOperationException()
+
+    override suspend fun uploadAttachment(
+        itemId: Long,
+        mimeType: String,
+        encryptedFilenameB64Url: String,
+        ciphertext: ByteArray,
+    ): AttachmentEntry = throw UnsupportedOperationException()
+
+    override suspend fun downloadAttachment(itemId: Long, attachmentId: Long): ByteArray =
+        throw UnsupportedOperationException()
+
+    override suspend fun deleteAttachment(itemId: Long, attachmentId: Long) =
+        throw UnsupportedOperationException()
 }
 
 /** In-memory [SessionStorage] for JVM tests (no Android Keystore). */

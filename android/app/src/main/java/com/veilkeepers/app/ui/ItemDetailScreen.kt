@@ -37,6 +37,7 @@ import com.veilkeepers.app.security.ClipboardTimer
 import com.veilkeepers.app.vault.DecryptedItem
 import com.veilkeepers.app.vault.VaultField
 import com.veilkeepers.app.vault.VaultRepository
+import com.veilkeepers.app.vault.attach.AttachmentUiState
 import kotlinx.coroutines.delay
 
 /**
@@ -53,6 +54,10 @@ fun ItemDetailScreen(
     onBack: () -> Unit,
     onEdit: (itemId: Long) -> Unit,
     onDelete: (itemId: Long) -> Unit,
+    attachments: AttachmentUiState = AttachmentUiState(),
+    onPreviewAttachment: (attachmentId: Long, mimeType: String) -> Unit = { _, _ -> },
+    onCloseAttachmentPreview: () -> Unit = {},
+    onDeleteAttachment: (attachmentId: Long) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -175,6 +180,15 @@ fun ItemDetailScreen(
                                     color = MaterialTheme.colorScheme.onSurface,
                                 )
                             }
+
+                            // Sprint 8: attachment list (metadata only; bytes
+                            // are fetched on demand when Preview is tapped).
+                            Spacer(Modifier.height(24.dp))
+                            AttachmentsSection(
+                                state = attachments,
+                                onPreview = onPreviewAttachment,
+                                onDelete = onDeleteAttachment,
+                            )
                         }
                     }
                 }
@@ -186,6 +200,15 @@ fun ItemDetailScreen(
                     Text("Delete item")
                 }
             }
+        }
+
+        // Preview dialog lives in its own window; only mounted while open so
+        // the decrypted bytes are released (zeroized by the VM) on dismiss.
+        attachments.preview?.let { preview ->
+            AttachmentPreviewDialog(
+                preview = preview,
+                onDismiss = onCloseAttachmentPreview,
+            )
         }
     }
 }

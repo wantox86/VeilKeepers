@@ -39,6 +39,86 @@ class ApiClient(
     fun deleteJson(path: String, bearerToken: String? = null): JSONObject =
         execute("DELETE", path, body = null, bearerToken = bearerToken)
 
+    /**
+     * POSTs a raw [body] as `application/octet-stream` (attachment upload,
+     * docs/api/vault.md) and parses the 2xx JSON response. Uses the longer
+     * [BINARY_READ_TIMEOUT_MS] because a ≤10 MiB ciphertext can take longer
+     * than a JSON round-trip over the LAN. The response is metadata only;
+     * neither the body nor the token is logged.
+     */
+    fun postBinary(path: String, body: ByteArray, bearerToken: String? = null): JSONObject {
+        val connection = openBinary("POST", path, "application/json", bearerToken)
+        try {
+            connection.doOutput = true
+            connection.setRequestProperty("Content-Type", "application/octet-stream")
+            connection.outputStream.use { it.write(body) }
+            val status = connection.responseCode
+            if (status in 200..299) {
+                val text = connection.inputStream.use { it.readBytes() }.toString(Charsets.UTF_8)
+                return try {
+                    JSONObject(text)
+                } catch (e: JSONException) {
+                    throw ApiError.Internal
+                }
+            }
+            throw errorFrom(status, connection)
+        } catch (e: ApiError) {
+            throw e
+        } catch (e: IOException) {
+            throw ApiError.Network(e)
+        } finally {
+            connection.disconnect()
+        }
+    }
+
+    /**
+     * GETs [path] and returns the raw 2xx response bytes (attachment
+     * ciphertext download). The server answers `application/octet-stream`; the
+     * bytes are returned verbatim for client-side decryption and never logged.
+     */
+    fun getBinary(path: String, bearerToken: String? = null): ByteArray {
+        val connection = openBinary("GET", path, "application/octet-stream", bearerToken)
+        try {
+            val status = connection.responseCode
+            if (status in 200..299) {
+                return connection.inputStream.use { it.readBytes() }
+            }
+            throw errorFrom(status, connection)
+        } catch (e: ApiError) {
+            throw e
+        } catch (e: IOException) {
+            throw ApiError.Network(e)
+        } finally {
+            connection.disconnect()
+        }
+    }
+
+    /**
+     * Opens a connection for the binary routes: same base/token handling as
+     * [execute] but with [BINARY_READ_TIMEOUT_MS] and a caller-chosen Accept.
+     */
+    private fun openBinary(
+        method: String,
+        path: String,
+        accept: String,
+        bearerToken: String?,
+    ): HttpURLConnection {
+        val root = baseUrl.trim().trimEnd('/')
+        return try {
+            val conn = URL(root + path).openConnection() as HttpURLConnection
+            conn.connectTimeout = connectTimeoutMs
+            conn.readTimeout = BINARY_READ_TIMEOUT_MS
+            conn.requestMethod = method
+            conn.setRequestProperty("Accept", accept)
+            bearerToken?.let { conn.setRequestProperty("Authorization", "Bearer $it") }
+            conn
+        } catch (e: IOException) {
+            throw ApiError.Network(e)
+        } catch (e: ClassCastException) {
+            throw ApiError.InvalidInput
+        }
+    }
+
     private fun execute(method: String, path: String, body: String?, bearerToken: String?): JSONObject {
         val root = baseUrl.trim().trimEnd('/')
         val connection: HttpURLConnection = try {
@@ -105,5 +185,8 @@ class ApiClient(
 
         /** Read timeout: sized for server-side bcrypt, not for client KDF. */
         const val READ_TIMEOUT_MS = 20_000
+
+        /** Read timeout for the binary attachment routes: sized for ≤10 MiB. */
+        const val BINARY_READ_TIMEOUT_MS = 60_000
     }
 }

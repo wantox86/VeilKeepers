@@ -47,6 +47,25 @@ data class DecryptedItem(
 /** Decrypted item page plus the contract's warning-only `has_more` flag. */
 data class DecryptedItemList(val items: List<DecryptedItem>, val hasMore: Boolean)
 
+/**
+ * Decrypted domain view of a backend attachment entry (Sprint 8).
+ *
+ * The server stores only the ciphertext and an opaque encrypted filename;
+ * [filename] is the client-decrypted name, or [VaultRepository.UNDECRYPTABLE]
+ * when GCM authentication fails (wrong VK, tampering) — the raw blob or the
+ * exception is never surfaced. [size] is the CIPHERTEXT byte length on the
+ * server, so the plaintext length is size −
+ * [com.veilkeepers.app.crypto.PayloadCipher.CIPHER_OVERHEAD_BYTES].
+ */
+data class AttachmentMeta(
+    val id: Long,
+    val itemId: Long,
+    val filename: String,
+    val mimeType: String,
+    val size: Long,
+    val createdAt: String,
+)
+
 /** Whole decrypted vault snapshot (one parallel categories+items fetch). */
 data class VaultSnapshot(
     val categories: List<DecryptedCategory>,
