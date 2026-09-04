@@ -1,6 +1,7 @@
 package com.veilkeepers.app.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -12,11 +13,13 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.WarningAmber
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
@@ -29,19 +32,23 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
+import com.veilkeepers.app.R
 import com.veilkeepers.app.auth.AuthUiState
+import com.veilkeepers.app.ui.components.BrandMark
+import com.veilkeepers.app.ui.theme.Spacing
 
 /**
  * Register screen: username, password, confirm password.
  *
  * The no-recovery warning banner is MANDATORY (spec-1.md §A.2, spec.md §18.2)
  * and must stay visible — forgetting the master password means the vault is
- * unrecoverable.
+ * unrecoverable. Copy is resource-backed; rhythm uses spacing tokens.
  */
 @Composable
 fun RegisterScreen(
@@ -67,15 +74,17 @@ fun RegisterScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .verticalScroll(rememberScrollState())
-                .padding(horizontal = 24.dp, vertical = 32.dp),
+                .padding(horizontal = Spacing.lg, vertical = Spacing.xl),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
+            BrandMark(size = 56.dp)
+            Spacer(Modifier.height(Spacing.md))
             Text(
-                text = "Create your vault",
+                text = stringResource(R.string.register_title),
                 style = MaterialTheme.typography.headlineSmall,
                 color = MaterialTheme.colorScheme.primary,
             )
-            Spacer(Modifier.height(16.dp))
+            Spacer(Modifier.height(Spacing.md))
 
             // MANDATORY no-recovery warning — spec-1.md §A.2. Do not remove.
             Box(
@@ -83,35 +92,41 @@ fun RegisterScreen(
                     .fillMaxWidth()
                     .background(
                         color = MaterialTheme.colorScheme.errorContainer,
-                        shape = RoundedCornerShape(12.dp),
+                        shape = MaterialTheme.shapes.large,
                     )
-                    .padding(16.dp),
+                    .padding(Spacing.md),
             ) {
-                Column {
-                    Text(
-                        text = "NO PASSWORD RECOVERY",
-                        style = MaterialTheme.typography.labelLarge,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.onErrorContainer,
+                Row(verticalAlignment = Alignment.Top) {
+                    Icon(
+                        imageVector = Icons.Outlined.WarningAmber,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onErrorContainer,
+                        modifier = Modifier.size(22.dp),
                     )
-                    Spacer(Modifier.height(4.dp))
-                    Text(
-                        text = "Your vault is encrypted with keys derived on this " +
-                            "device. If you forget your master password, your data " +
-                            "cannot be recovered — not by you, and not by the server. " +
-                            "Choose a password you will never forget.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onErrorContainer,
-                    )
+                    Spacer(Modifier.width(Spacing.sm))
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            text = stringResource(R.string.register_no_recovery_title),
+                            style = MaterialTheme.typography.labelLarge,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onErrorContainer,
+                        )
+                        Spacer(Modifier.height(Spacing.xs))
+                        Text(
+                            text = stringResource(R.string.register_no_recovery_body),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onErrorContainer,
+                        )
+                    }
                 }
             }
 
-            Spacer(Modifier.height(16.dp))
+            Spacer(Modifier.height(Spacing.md))
             OutlinedTextField(
                 value = serverUrl,
                 onValueChange = onServerUrlChange,
-                label = { Text("Server URL") },
-                placeholder = { Text("http://192.168.50.131:18080") },
+                label = { Text(stringResource(R.string.field_server_url)) },
+                placeholder = { Text(stringResource(R.string.field_server_url_placeholder)) },
                 singleLine = true,
                 enabled = !busy,
                 keyboardOptions = KeyboardOptions(
@@ -120,22 +135,22 @@ fun RegisterScreen(
                 ),
                 modifier = Modifier.fillMaxWidth(),
             )
-            Spacer(Modifier.height(12.dp))
+            Spacer(Modifier.height(Spacing.md))
             OutlinedTextField(
                 value = username,
                 onValueChange = onUsernameChange,
-                label = { Text("Username") },
+                label = { Text(stringResource(R.string.field_username)) },
                 singleLine = true,
                 enabled = !busy,
-                supportingText = { Text("3–64 characters, case-insensitive") },
+                supportingText = { Text(stringResource(R.string.field_username_hint)) },
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
                 modifier = Modifier.fillMaxWidth(),
             )
-            Spacer(Modifier.height(12.dp))
+            Spacer(Modifier.height(Spacing.md))
             OutlinedTextField(
                 value = password,
                 onValueChange = { password = it },
-                label = { Text("Master password") },
+                label = { Text(stringResource(R.string.field_master_password)) },
                 singleLine = true,
                 enabled = !busy,
                 visualTransformation = PasswordVisualTransformation(),
@@ -145,16 +160,16 @@ fun RegisterScreen(
                 ),
                 modifier = Modifier.fillMaxWidth(),
             )
-            Spacer(Modifier.height(12.dp))
+            Spacer(Modifier.height(Spacing.md))
             OutlinedTextField(
                 value = confirm,
                 onValueChange = { confirm = it },
-                label = { Text("Confirm master password") },
+                label = { Text(stringResource(R.string.field_confirm_password)) },
                 singleLine = true,
                 enabled = !busy,
                 isError = mismatch,
                 supportingText = if (mismatch) {
-                    { Text("Passwords do not match") }
+                    { Text(stringResource(R.string.register_password_mismatch)) }
                 } else {
                     null
                 },
@@ -167,7 +182,7 @@ fun RegisterScreen(
             )
 
             (state as? AuthUiState.Error)?.let { error ->
-                Spacer(Modifier.height(16.dp))
+                Spacer(Modifier.height(Spacing.md))
                 Text(
                     text = error.message,
                     color = MaterialTheme.colorScheme.error,
@@ -175,7 +190,7 @@ fun RegisterScreen(
                 )
             }
 
-            Spacer(Modifier.height(24.dp))
+            Spacer(Modifier.height(Spacing.lg))
             Button(
                 onClick = {
                     onRegister(password.toCharArray())
@@ -184,28 +199,40 @@ fun RegisterScreen(
                 },
                 enabled = !busy && !mismatch && serverUrl.isNotBlank() &&
                     username.isNotBlank() && password.isNotEmpty() && password == confirm,
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(50.dp),
             ) {
                 if (busy) {
                     CircularProgressIndicator(
                         modifier = Modifier.size(18.dp),
                         strokeWidth = 2.dp,
+                        color = MaterialTheme.colorScheme.onPrimary,
                     )
-                    Spacer(Modifier.width(12.dp))
-                    Text(if (state is AuthUiState.Deriving) "Deriving keys…" else "Creating account…")
+                    Spacer(Modifier.width(Spacing.sm))
+                    Text(
+                        if (state is AuthUiState.Deriving) {
+                            stringResource(R.string.progress_deriving_keys)
+                        } else {
+                            stringResource(R.string.register_progress_creating)
+                        },
+                    )
                 } else {
-                    Text("Create vault")
+                    Text(stringResource(R.string.register_submit))
                 }
             }
-            Spacer(Modifier.height(8.dp))
-            Row(verticalAlignment = Alignment.CenterVertically) {
+            Spacer(Modifier.height(Spacing.sm))
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.Center,
+            ) {
                 Text(
-                    text = "Already have an account?",
+                    text = stringResource(R.string.register_have_account),
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 TextButton(onClick = onSwitchToLogin, enabled = !busy) {
-                    Text("Sign in")
+                    Text(stringResource(R.string.register_sign_in))
                 }
             }
         }

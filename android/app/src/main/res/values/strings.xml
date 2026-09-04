@@ -1,0 +1,175 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  All user-facing copy for the Compose UI (Sprint 9, decision #4). Screens read
+  these via stringResource / pluralStringResource — no hardcoded literals in
+  ui/*.kt. Brand vocabulary (Vault / Secret / Keeper / Veil) is used sparingly
+  and always beside a plain-language label (spec.md §28: "do not overuse
+  fantasy terminology"). Punctuation-only separators (· • —) stay inline in
+  code; pure search-logic labels (SearchEngine.matchSummary) are out of scope.
+-->
+<resources>
+
+    <!-- App / brand -->
+    <string name="app_name">Veil Keepers</string>
+    <string name="brand_title">VEIL KEEPERS</string>
+
+    <!-- Shared actions -->
+    <string name="action_cancel">Cancel</string>
+    <string name="action_save">Save</string>
+    <string name="action_done">Done</string>
+    <string name="action_ok">OK</string>
+    <string name="action_retry">Try again</string>
+    <string name="action_delete">Delete</string>
+    <string name="action_rename">Rename</string>
+    <string name="action_remove">Remove</string>
+    <string name="action_preview">Preview</string>
+    <string name="action_close">Close</string>
+    <string name="action_dismiss">Dismiss</string>
+    <string name="action_edit">Edit</string>
+    <string name="action_copy">Copy</string>
+    <string name="action_new_item">New item</string>
+    <string name="label_uncategorized">Uncategorized</string>
+
+    <!-- Shared fields -->
+    <string name="field_server_url">Server URL</string>
+    <string name="field_server_url_placeholder">http://192.168.50.131:18080</string>
+    <string name="field_username">Username</string>
+    <string name="field_username_hint">3–64 characters, case-insensitive</string>
+    <string name="field_master_password">Master password</string>
+    <string name="field_confirm_password">Confirm master password</string>
+    <string name="field_title">Title</string>
+    <string name="field_title_placeholder">e.g. Server login</string>
+    <string name="field_label">Label</string>
+    <string name="field_value">Value</string>
+    <string name="field_secret">Secret</string>
+
+    <!-- Shared progress -->
+    <string name="progress_deriving_keys">Deriving keys…</string>
+    <string name="progress_lifting_veil">Lifting the veil…</string>
+
+    <!-- Sections -->
+    <string name="section_categories">Categories</string>
+    <string name="section_recent">Recent</string>
+    <string name="section_results">Results</string>
+    <string name="section_notes">Notes</string>
+    <string name="section_fields">Fields</string>
+    <string name="section_attachments">Attachments</string>
+
+    <!-- Login -->
+    <string name="login_subtitle">Keep your secrets behind the veil</string>
+    <string name="login_progress_signing_in">Signing in…</string>
+    <string name="login_submit">Unlock</string>
+    <string name="login_no_account">No account yet?</string>
+    <string name="login_create_one">Create one</string>
+
+    <!-- Register -->
+    <string name="register_title">Create your vault</string>
+    <!-- MANDATORY no-recovery warning (spec-1.md §A.2, spec.md §18.2). -->
+    <string name="register_no_recovery_title">NO PASSWORD RECOVERY</string>
+    <string name="register_no_recovery_body">Your vault is encrypted with keys derived on this device. If you forget your master password, your data cannot be recovered — not by you, and not by the server. Choose a password you will never forget.</string>
+    <string name="register_password_mismatch">Passwords do not match</string>
+    <string name="register_progress_creating">Creating account…</string>
+    <string name="register_submit">Create vault</string>
+    <string name="register_have_account">Already have an account?</string>
+    <string name="register_sign_in">Sign in</string>
+
+    <!-- Unlock (soft auto-lock / cold start with a live session) -->
+    <string name="unlock_title">THE VEIL FELL</string>
+    <string name="unlock_subtitle">your vault locked itself while you were away</string>
+    <string name="unlock_section">Unlock</string>
+    <string name="unlock_submit">Unlock vault</string>
+    <string name="unlock_biometric">Unlock with biometrics</string>
+    <string name="unlock_session_note">Your session stays signed in — locking only clears the vault key from memory.</string>
+    <string name="unlock_sign_out">Sign out instead</string>
+
+    <!-- Vault home -->
+    <string name="home_subtitle">the vault behind the veil</string>
+    <string name="home_settings">Settings</string>
+    <string name="home_lock_sign_out">Lock &amp; sign out</string>
+    <string name="home_has_more_warning">This vault holds more than one page of entries. Only the most recent are shown in V0.1.</string>
+    <string name="home_search_placeholder">Search your vault…</string>
+    <string name="home_search_local_note">Local only — queries never leave this device.</string>
+    <string name="home_no_categories">No categories yet — create one below.</string>
+    <string name="home_no_recents">Nothing behind the veil yet. Add your first item.</string>
+    <string name="home_new_category">New category</string>
+
+    <!-- Vault settings dialog -->
+    <string name="settings_title">Vault settings</string>
+    <string name="settings_auto_lock">Auto lock</string>
+    <string name="settings_biometric">Biometric unlock</string>
+    <string name="settings_biometric_unavailable">No strong biometric is enrolled on this device.</string>
+    <string name="settings_biometric_enabled">Biometric unlock enabled.</string>
+    <string name="settings_biometric_disabled">Biometric unlock disabled.</string>
+    <string name="autolock_immediately">Immediately</string>
+    <string name="autolock_one_minute">1 minute</string>
+    <string name="autolock_five_minutes">5 minutes</string>
+    <string name="autolock_fifteen_minutes">15 minutes</string>
+
+    <!-- Local search -->
+    <string name="search_progress">Searching the veil…</string>
+    <string name="search_no_match">No matches behind the veil for “%1$s”.</string>
+
+    <!-- Category screen -->
+    <string name="category_empty_named">This category is empty.</string>
+    <string name="category_empty_uncategorized">Nothing sits outside the categories.</string>
+    <string name="category_new_item_here">New item here</string>
+    <string name="category_rename_title">Rename category</string>
+    <string name="category_delete_title">Delete \"%1$s\"?</string>
+    <plurals name="category_delete_body">
+        <item quantity="one">Its %1$d item will NOT be deleted — it moves to Uncategorized.</item>
+        <item quantity="other">Its %1$d items will NOT be deleted — they move to Uncategorized.</item>
+    </plurals>
+    <string name="category_delete_warning">The category itself cannot be restored.</string>
+    <string name="category_delete_confirm">Delete category</string>
+    <string name="category_delete_keep">Keep it</string>
+    <string name="category_name_field">Category name</string>
+
+    <!-- Item detail -->
+    <string name="detail_updated">updated %1$s</string>
+    <string name="detail_undecryptable_message">%1$s — this entry cannot be opened with the current vault key.</string>
+    <string name="detail_no_notes">No notes.</string>
+    <string name="detail_delete_item">Delete item</string>
+    <string name="detail_copied">Copied — clears in %1$d s</string>
+    <string name="detail_notebook_empty">notebook</string>
+
+    <!-- Item edit -->
+    <string name="edit_item_title">Edit item</string>
+    <string name="edit_category_label">Category: %1$s</string>
+    <string name="edit_add_field">+ Add field</string>
+    <string name="edit_add_image">+ Add image</string>
+    <string name="edit_image_note">JPEG, PNG, WebP or GIF up to 10 MB. Uploaded encrypted.</string>
+    <string name="edit_submit_save">Encrypt &amp; save</string>
+    <string name="edit_submit_update">Encrypt &amp; update</string>
+
+    <!-- Attachments -->
+    <string name="attachments_loading">Loading attachments…</string>
+    <string name="attachments_empty">No attachments.</string>
+    <string name="attachments_working">Working…</string>
+    <string name="attachments_render_error">This image could not be rendered.</string>
+    <string name="bytes_mb">%1$d MB</string>
+    <string name="bytes_kb">%1$d KB</string>
+    <string name="bytes_b">%1$d B</string>
+
+    <!-- Vault-level dialogs (MainActivity) -->
+    <string name="vault_error_dialog_title">Something went wrong</string>
+    <string name="vault_error_dialog_body">%1$s Your vault is unchanged; try again when ready.</string>
+
+    <!-- Content descriptions (icons / icon-only controls with no visible text) -->
+    <string name="cd_back">Back</string>
+    <string name="cd_add_item">Add item</string>
+    <string name="cd_show_secret">Show secret value</string>
+    <string name="cd_hide_secret">Hide secret value</string>
+    <string name="cd_clear_search">Clear search</string>
+    <string name="cd_attachment_preview">Attachment preview</string>
+
+    <!-- Counts -->
+    <plurals name="item_count">
+        <item quantity="one">%d item</item>
+        <item quantity="other">%d items</item>
+    </plurals>
+    <plurals name="match_count">
+        <item quantity="one">%d match</item>
+        <item quantity="other">%d matches</item>
+    </plurals>
+
+</resources>

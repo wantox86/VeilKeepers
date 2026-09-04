@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Self-made adaptive-icon foreground: a candlelight-amber padlock with a
+  transparent keyhole (even-odd cut), centred inside the 72dp safe zone of the
+  108dp canvas so no launcher mask clips it. No external/stock assets.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- Shackle: the U-band above the body (drawn first, tucks behind body). -->
+    <path
+        android:fillColor="@color/ic_launcher_foreground"
+        android:pathData="M44,58 L44,44 A10,10 0 0 1 64,44 L64,58 L58,58 L58,44 A4,4 0 0 0 50,44 L50,58 Z" />
+
+    <!-- Body with a keyhole cut out via even-odd fill (hole shows background). -->
+    <path
+        android:fillColor="@color/ic_launcher_foreground"
+        android:fillType="evenOdd"
+        android:pathData="M44,56 L64,56 A6,6 0 0 1 70,62 L70,74 A6,6 0 0 1 64,80 L44,80 A6,6 0 0 1 38,74 L38,62 A6,6 0 0 1 44,56 Z M50,65 A4,4 0 1 0 58,65 A4,4 0 1 0 50,65 Z M52,69.5 L56,69.5 L55,76 L53,76 Z" />
+</vector>

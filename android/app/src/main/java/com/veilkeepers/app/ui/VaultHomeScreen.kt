@@ -1,5 +1,7 @@
 package com.veilkeepers.app.ui
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.Crossfade
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -11,16 +13,28 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Add
+import androidx.compose.material.icons.outlined.Close
+import androidx.compose.material.icons.outlined.CreateNewFolder
+import androidx.compose.material.icons.outlined.Inbox
+import androidx.compose.material.icons.outlined.Info
+import androidx.compose.material.icons.outlined.Lock
+import androidx.compose.material.icons.outlined.Search
+import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.FloatingActionButton
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
+import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -33,24 +47,30 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
-import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.res.pluralStringResource
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
+import com.veilkeepers.app.R
 import com.veilkeepers.app.security.AutoLockPolicy
-import com.veilkeepers.app.vault.DecryptedItem
+import com.veilkeepers.app.ui.components.EmptyState
+import com.veilkeepers.app.ui.components.SectionHeader
+import com.veilkeepers.app.ui.components.VaultItemRow
+import com.veilkeepers.app.ui.components.VaultTopBar
+import com.veilkeepers.app.ui.theme.Spacing
+import com.veilkeepers.app.ui.theme.VeilSerif
 import com.veilkeepers.app.vault.VaultUiState
 import com.veilkeepers.app.vault.search.SearchEngine
 import com.veilkeepers.app.vault.search.SearchUiState
 
 /**
- * Home screen: category grid (decrypted name + item_count), Recent section,
- * dismissible has_more warning banner, create-item/create-category
- * affordances, settings (auto-lock policy + biometric toggle), and lock &
- * sign out. Sprint 7: a local search entry point — a non-blank [searchQuery]
- * swaps the grid/recents for results matched LOCALLY over the decrypted
- * items; the query never leaves the process (docs/security/local-search.md).
+ * Home screen (spec.md §18): a Scaffold with the brand top bar (settings +
+ * lock actions), a "+" FAB for a new item (§18.3), a two-column category grid
+ * with item counts, a Recent list, dismissible warning banners, and a local
+ * search entry point. Sprint 7: a non-blank [searchQuery] cross-fades the
+ * grid/recents for results matched LOCALLY over the decrypted items — the query
+ * never leaves the process (docs/security/local-search.md).
  * Stateless — all data in, all events out.
  */
 @Composable
@@ -81,142 +101,181 @@ fun VaultHomeScreen(
     val uncategorizedCount = state.items.count { it.categoryId == null }
     val searching = searchQuery.trim().isNotEmpty()
 
-    Surface(
+    val uncategorizedLabel = stringResource(R.string.label_uncategorized)
+    val settingsLabel = stringResource(R.string.home_settings)
+    val lockLabel = stringResource(R.string.home_lock_sign_out)
+    val addItemLabel = stringResource(R.string.cd_add_item)
+    val clearSearchLabel = stringResource(R.string.cd_clear_search)
+
+    Scaffold(
         modifier = modifier.fillMaxSize(),
-        color = MaterialTheme.colorScheme.background,
-    ) {
+        containerColor = MaterialTheme.colorScheme.background,
+        topBar = {
+            VaultTopBar(
+                title = stringResource(R.string.brand_title),
+                subtitle = stringResource(R.string.home_subtitle),
+                actions = {
+                    IconButton(onClick = { showSettings = true }) {
+                        Icon(
+                            imageVector = Icons.Outlined.Settings,
+                            contentDescription = settingsLabel,
+                        )
+                    }
+                    IconButton(onClick = onLockAndSignOut) {
+                        Icon(
+                            imageVector = Icons.Outlined.Lock,
+                            contentDescription = lockLabel,
+                        )
+                    }
+                },
+            )
+        },
+        floatingActionButton = {
+            FloatingActionButton(
+                onClick = onNewItem,
+                containerColor = MaterialTheme.colorScheme.primary,
+                contentColor = MaterialTheme.colorScheme.onPrimary,
+            ) {
+                Icon(imageVector = Icons.Outlined.Add, contentDescription = addItemLabel)
+            }
+        },
+    ) { innerPadding ->
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(horizontal = 24.dp, vertical = 24.dp),
+                .padding(innerPadding)
+                .padding(horizontal = Spacing.lg),
         ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Column(Modifier.weight(1f)) {
-                    Text(
-                        text = "VEIL KEEPERS",
-                        style = MaterialTheme.typography.titleLarge,
-                        letterSpacing = 4.sp,
-                        color = MaterialTheme.colorScheme.primary,
-                    )
-                    Text(
-                        text = "the vault behind the veil",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-                OutlinedButton(onClick = { showSettings = true }) {
-                    Text("Settings")
-                }
-                Spacer(Modifier.width(8.dp))
-                OutlinedButton(onClick = onLockAndSignOut) {
-                    Text("Lock & sign out")
-                }
-            }
-
-            Spacer(Modifier.height(16.dp))
-
-            if (state.hasMoreWarning && !state.hasMoreDismissed) {
+            val showHasMore = state.hasMoreWarning && !state.hasMoreDismissed
+            AnimatedVisibility(visible = showHasMore) {
                 WarningBanner(
-                    text = "This vault holds more than one page of entries. " +
-                        "Only the most recent are shown in V0.1.",
+                    text = stringResource(R.string.home_has_more_warning),
                     onDismiss = onDismissHasMore,
                 )
-                Spacer(Modifier.height(10.dp))
             }
-            if (seedWarning != null && !seedWarningDismissed) {
-                WarningBanner(
-                    text = seedWarning,
-                    onDismiss = { seedWarningDismissed = true },
-                )
-                Spacer(Modifier.height(10.dp))
+            val showSeed = seedWarning != null && !seedWarningDismissed
+            AnimatedVisibility(visible = showSeed) {
+                if (seedWarning != null) {
+                    WarningBanner(
+                        text = seedWarning,
+                        onDismiss = { seedWarningDismissed = true },
+                    )
+                }
             }
 
             OutlinedTextField(
                 value = searchQuery,
                 onValueChange = onSearchQueryChange,
                 modifier = Modifier.fillMaxWidth(),
-                placeholder = { Text("Search your vault…") },
-                supportingText = {
-                    Text("Local only — queries never leave this device.")
-                },
-                singleLine = true,
-            )
-            Spacer(Modifier.height(10.dp))
-
-            Column(
-                modifier = Modifier
-                    .weight(1f)
-                    .verticalScroll(rememberScrollState()),
-            ) {
-                if (searching) {
-                    SearchResultsSection(
-                        searchState = searchState,
-                        categoryNameFor = { categoryIdFor -> categoryNameFor(state, categoryIdFor) },
-                        onOpenItem = onOpenItem,
+                placeholder = { Text(stringResource(R.string.home_search_placeholder)) },
+                leadingIcon = {
+                    Icon(
+                        imageVector = Icons.Outlined.Search,
+                        // Decorative: the placeholder names the field.
+                        contentDescription = null,
                     )
-                } else {
-                    SectionLabel("Categories")
-                    Spacer(Modifier.height(8.dp))
-
-                    val cards = state.categories + null // trailing null = Uncategorized card
-                    cards.chunked(2).forEach { pair ->
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(12.dp),
-                        ) {
-                            pair.forEach { category ->
-                                CategoryCard(
-                                    modifier = Modifier.weight(1f),
-                                    name = category?.name ?: "Uncategorized",
-                                    itemCount = category?.itemCount ?: uncategorizedCount,
-                                    subdued = category == null,
-                                    onClick = { onOpenCategory(category?.id) },
-                                )
-                            }
-                            if (pair.size == 1) Spacer(Modifier.weight(1f))
-                        }
-                        Spacer(Modifier.height(12.dp))
-                    }
-                    if (state.categories.isEmpty()) {
-                        Text(
-                            text = "No categories yet — create one below.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                        Spacer(Modifier.height(12.dp))
-                    }
-
-                    SectionLabel("Recent")
-                    Spacer(Modifier.height(8.dp))
-                    if (state.recents.isEmpty()) {
-                        Text(
-                            text = "Nothing behind the veil yet. Add your first item.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    } else {
-                        state.recents.forEach { item ->
-                            VaultItemRow(
-                                item = item,
-                                subtitle = categoryNameFor(state, item.categoryId),
-                                onClick = { onOpenItem(item.id) },
+                },
+                trailingIcon = {
+                    if (searchQuery.isNotEmpty()) {
+                        IconButton(onClick = { onSearchQueryChange("") }) {
+                            Icon(
+                                imageVector = Icons.Outlined.Close,
+                                contentDescription = clearSearchLabel,
                             )
-                            Spacer(Modifier.height(8.dp))
                         }
                     }
-                }
-            }
+                },
+                supportingText = { Text(stringResource(R.string.home_search_local_note)) },
+                singleLine = true,
+                shape = MaterialTheme.shapes.medium,
+            )
+            Spacer(Modifier.height(Spacing.sm))
 
-            Spacer(Modifier.height(16.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                Button(onClick = onNewItem, modifier = Modifier.weight(1f)) {
-                    Text("New item")
-                }
-                OutlinedButton(onClick = { showNewCategory = true }) {
-                    Text("New category")
+            Crossfade(
+                targetState = searching,
+                modifier = Modifier.weight(1f),
+                label = "homeContent",
+            ) { isSearching ->
+                if (isSearching) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .verticalScroll(rememberScrollState()),
+                    ) {
+                        SearchResultsSection(
+                            searchState = searchState,
+                            categoryNameFor = { id -> categoryNameFor(state, id, uncategorizedLabel) },
+                            onOpenItem = onOpenItem,
+                        )
+                        Spacer(Modifier.height(96.dp))
+                    }
+                } else {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .verticalScroll(rememberScrollState()),
+                    ) {
+                        SectionHeader(stringResource(R.string.section_categories))
+                        Spacer(Modifier.height(Spacing.sm))
+
+                        val cards = state.categories + null // trailing null = Uncategorized card
+                        cards.chunked(2).forEach { pair ->
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(Spacing.sm + 4.dp),
+                            ) {
+                                pair.forEach { category ->
+                                    CategoryCard(
+                                        modifier = Modifier.weight(1f),
+                                        name = category?.name ?: uncategorizedLabel,
+                                        itemCount = category?.itemCount ?: uncategorizedCount,
+                                        subdued = category == null,
+                                        onClick = { onOpenCategory(category?.id) },
+                                    )
+                                }
+                                if (pair.size == 1) Spacer(Modifier.weight(1f))
+                            }
+                            Spacer(Modifier.height(Spacing.sm + 4.dp))
+                        }
+
+                        if (state.categories.isEmpty()) {
+                            Text(
+                                text = stringResource(R.string.home_no_categories),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        TextButton(onClick = { showNewCategory = true }) {
+                            Icon(
+                                imageVector = Icons.Outlined.CreateNewFolder,
+                                contentDescription = null,
+                                modifier = Modifier.size(18.dp),
+                            )
+                            Spacer(Modifier.width(Spacing.sm))
+                            Text(stringResource(R.string.home_new_category))
+                        }
+
+                        Spacer(Modifier.height(Spacing.md))
+                        SectionHeader(stringResource(R.string.section_recent))
+                        Spacer(Modifier.height(Spacing.sm))
+                        if (state.recents.isEmpty()) {
+                            EmptyState(
+                                icon = Icons.Outlined.Inbox,
+                                title = stringResource(R.string.home_no_recents),
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                        } else {
+                            state.recents.forEach { item ->
+                                VaultItemRow(
+                                    item = item,
+                                    meta = categoryNameFor(state, item.categoryId, uncategorizedLabel),
+                                    onClick = { onOpenItem(item.id) },
+                                )
+                                Spacer(Modifier.height(Spacing.sm))
+                            }
+                        }
+                        Spacer(Modifier.height(96.dp))
+                    }
                 }
             }
         }
@@ -224,7 +283,7 @@ fun VaultHomeScreen(
 
     if (showNewCategory) {
         CategoryNameDialog(
-            title = "New category",
+            title = stringResource(R.string.home_new_category),
             initialName = "",
             onSubmit = onCreateCategory,
             onDismiss = { showNewCategory = false },
@@ -251,7 +310,7 @@ fun VaultHomeScreen(
  * auto-lock policy picker (default Immediately) and the opt-in biometric
  * toggle. Enabling biometrics runs the enrollment prompt with the in-memory
  * VK; disabling wipes the blob + Keystore alias. The explicit "Lock & sign
- * out" button stays on the home screen, unchanged.
+ * out" action stays in the home top bar, unchanged.
  */
 @Composable
 internal fun VaultSettingsDialog(
@@ -265,11 +324,11 @@ internal fun VaultSettingsDialog(
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Vault settings") },
+        title = { Text(stringResource(R.string.settings_title)) },
         text = {
             Column(Modifier.fillMaxWidth()) {
-                SectionLabel("Auto lock")
-                Spacer(Modifier.height(4.dp))
+                SectionHeader(stringResource(R.string.settings_auto_lock))
+                Spacer(Modifier.height(Spacing.xs))
                 AutoLockPolicy.entries.forEach { option ->
                     Row(
                         modifier = Modifier
@@ -282,7 +341,7 @@ internal fun VaultSettingsDialog(
                             selected = autoLockPolicy == option,
                             onClick = { onAutoLockPolicyChange(option) },
                         )
-                        Spacer(Modifier.width(8.dp))
+                        Spacer(Modifier.width(Spacing.sm))
                         Text(
                             text = autoLockLabel(option),
                             style = MaterialTheme.typography.bodyMedium,
@@ -291,22 +350,22 @@ internal fun VaultSettingsDialog(
                     }
                 }
 
-                Spacer(Modifier.height(12.dp))
-                SectionLabel("Biometric unlock")
-                Spacer(Modifier.height(4.dp))
+                Spacer(Modifier.height(Spacing.sm + 4.dp))
+                SectionHeader(stringResource(R.string.settings_biometric))
+                Spacer(Modifier.height(Spacing.xs))
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Column(Modifier.weight(1f)) {
                         Text(
-                            text = "Unlock with biometrics",
+                            text = stringResource(R.string.unlock_biometric),
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurface,
                         )
                         if (!biometricSettingAvailable && !biometricEnabled) {
                             Text(
-                                text = "No strong biometric is enrolled on this device.",
+                                text = stringResource(R.string.settings_biometric_unavailable),
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
@@ -320,7 +379,7 @@ internal fun VaultSettingsDialog(
                 }
 
                 if (notice != null) {
-                    Spacer(Modifier.height(10.dp))
+                    Spacer(Modifier.height(Spacing.sm + 2.dp))
                     Text(
                         text = notice,
                         style = MaterialTheme.typography.bodySmall,
@@ -330,64 +389,68 @@ internal fun VaultSettingsDialog(
             }
         },
         confirmButton = {
-            Button(onClick = onDismiss) { Text("Done") }
+            Button(onClick = onDismiss) { Text(stringResource(R.string.action_done)) }
         },
     )
 }
 
 /** Display label for an auto-lock option (spec.md §24 wording). */
-internal fun autoLockLabel(policy: AutoLockPolicy): String = when (policy) {
-    AutoLockPolicy.IMMEDIATELY -> "Immediately"
-    AutoLockPolicy.ONE_MINUTE -> "1 minute"
-    AutoLockPolicy.FIVE_MINUTES -> "5 minutes"
-    AutoLockPolicy.FIFTEEN_MINUTES -> "15 minutes"
-}
-
-/** Resolves a display name for [categoryId]; null = Uncategorized. */
-internal fun categoryNameFor(state: VaultUiState.Loaded, categoryId: Long?): String =
-    if (categoryId == null) {
-        "Uncategorized"
-    } else {
-        state.categories.firstOrNull { it.id == categoryId }?.name ?: "Uncategorized"
-    }
-
-/** Wide-tracked uppercase eyebrow label for sections. */
 @Composable
-internal fun SectionLabel(text: String, modifier: Modifier = Modifier) {
-    Text(
-        text = text.uppercase(),
-        modifier = modifier,
-        style = MaterialTheme.typography.labelSmall,
-        letterSpacing = 3.sp,
-        color = MaterialTheme.colorScheme.primary,
-    )
+internal fun autoLockLabel(policy: AutoLockPolicy): String = stringResource(
+    when (policy) {
+        AutoLockPolicy.IMMEDIATELY -> R.string.autolock_immediately
+        AutoLockPolicy.ONE_MINUTE -> R.string.autolock_one_minute
+        AutoLockPolicy.FIVE_MINUTES -> R.string.autolock_five_minutes
+        AutoLockPolicy.FIFTEEN_MINUTES -> R.string.autolock_fifteen_minutes
+    },
+)
+
+/** Resolves a display name for [categoryId]; null (or unknown) = [fallback]. */
+internal fun categoryNameFor(
+    state: VaultUiState.Loaded,
+    categoryId: Long?,
+    fallback: String,
+): String = if (categoryId == null) {
+    fallback
+} else {
+    state.categories.firstOrNull { it.id == categoryId }?.name ?: fallback
 }
 
 /** Dismissible amber-bordered notice (has_more warning / seeding warning). */
 @Composable
 internal fun WarningBanner(text: String, onDismiss: () -> Unit, modifier: Modifier = Modifier) {
     Surface(
-        modifier = modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(10.dp),
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(bottom = Spacing.sm + 2.dp),
+        shape = MaterialTheme.shapes.medium,
         color = MaterialTheme.colorScheme.surfaceVariant,
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.55f)),
     ) {
         Row(
-            modifier = Modifier.padding(start = 14.dp, top = 4.dp, end = 4.dp, bottom = 4.dp),
+            modifier = Modifier.padding(start = Spacing.sm + 4.dp, top = Spacing.xs, end = Spacing.xs, bottom = Spacing.xs),
             verticalAlignment = Alignment.CenterVertically,
         ) {
+            Icon(
+                imageVector = Icons.Outlined.Info,
+                // Decorative: the adjacent text carries the message.
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(18.dp),
+            )
+            Spacer(Modifier.width(Spacing.sm))
             Text(
                 text = text,
                 modifier = Modifier.weight(1f),
                 style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.primary,
+                color = MaterialTheme.colorScheme.onSurface,
             )
-            TextButton(onClick = onDismiss) { Text("Dismiss") }
+            TextButton(onClick = onDismiss) { Text(stringResource(R.string.action_dismiss)) }
         }
     }
 }
 
-/** One category tile in the home grid. */
+/** One category tile in the home grid (spec.md §18.3). */
 @Composable
 internal fun CategoryCard(
     name: String,
@@ -398,14 +461,14 @@ internal fun CategoryCard(
 ) {
     Surface(
         modifier = modifier.clickable(onClick = onClick),
-        shape = RoundedCornerShape(12.dp),
+        shape = MaterialTheme.shapes.large,
         color = MaterialTheme.colorScheme.surface,
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.6f)),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
     ) {
-        Column(Modifier.padding(14.dp)) {
+        Column(Modifier.padding(Spacing.sm + 4.dp)) {
             Box(
                 modifier = Modifier
-                    .padding(bottom = 8.dp)
+                    .padding(bottom = Spacing.sm)
                     .width(22.dp)
                     .height(2.dp)
                     .alpha(if (subdued) 0.35f else 1f),
@@ -425,7 +488,7 @@ internal fun CategoryCard(
             )
             Spacer(Modifier.height(2.dp))
             Text(
-                text = if (itemCount == 1) "1 item" else "$itemCount items",
+                text = pluralStringResource(R.plurals.item_count, itemCount, itemCount),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -433,56 +496,7 @@ internal fun CategoryCard(
     }
 }
 
-/** One item row (Recent list / category lists). */
-@Composable
-internal fun VaultItemRow(
-    item: DecryptedItem,
-    subtitle: String,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    Surface(
-        modifier = modifier
-            .fillMaxWidth()
-            .clickable(onClick = onClick),
-        shape = RoundedCornerShape(10.dp),
-        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
-    ) {
-        Row(
-            modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Column(Modifier.weight(1f)) {
-                Text(
-                    text = item.title,
-                    style = MaterialTheme.typography.titleSmall,
-                    color = MaterialTheme.colorScheme.onSurface,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                Text(
-                    text = subtitle + " · " + item.updatedAt.take(10),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
-            if (!item.undecryptable) {
-                Spacer(Modifier.width(8.dp))
-                Text(
-                    text = if (item.fields.isEmpty()) "notebook" else "${item.fields.size} fields",
-                    style = MaterialTheme.typography.labelSmall,
-                    fontFamily = FontFamily.Serif,
-                    fontStyle = FontStyle.Italic,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-        }
-    }
-}
-
-/** Shared create/rename dialog for categories. */
+/** Shared create/rename dialog for categories (used by Home + Category). */
 @Composable
 internal fun CategoryNameDialog(
     title: String,
@@ -498,7 +512,7 @@ internal fun CategoryNameDialog(
             OutlinedTextField(
                 value = name,
                 onValueChange = { name = it },
-                label = { Text("Category name") },
+                label = { Text(stringResource(R.string.category_name_field)) },
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth(),
             )
@@ -510,19 +524,19 @@ internal fun CategoryNameDialog(
                     onDismiss()
                 },
                 enabled = name.isNotBlank(),
-            ) { Text("Save") }
+            ) { Text(stringResource(R.string.action_save)) }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) { Text("Cancel") }
+            TextButton(onClick = onDismiss) { Text(stringResource(R.string.action_cancel)) }
         },
     )
 }
 
 /**
- * Sprint 7 search results (spec-1.md §F row 7). Rows are title + category
- * only; the per-row summary names WHERE the query matched (title / field
- * label / notes) and NEVER what matched — secret values stay masked until
- * the user opens the item and explicitly reveals them.
+ * Sprint 7 search results (spec-1.md §F row 7). Rows use the shared
+ * [VaultItemRow] — title + masked preview + category meta — and a per-row
+ * summary that names WHERE the query matched (title / field label / notes) and
+ * NEVER what matched. Secret values stay masked until the user opens the item.
  */
 @Composable
 internal fun SearchResultsSection(
@@ -533,36 +547,40 @@ internal fun SearchResultsSection(
     when (searchState) {
         is SearchUiState.Idle, is SearchUiState.Loading -> {
             Text(
-                text = "Searching the veil…",
+                text = stringResource(R.string.search_progress),
                 style = MaterialTheme.typography.bodySmall,
+                fontStyle = FontStyle.Italic,
+                fontFamily = VeilSerif,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
 
         is SearchUiState.Results -> {
-            SectionLabel("Results")
-            Spacer(Modifier.height(8.dp))
+            SectionHeader(stringResource(R.string.section_results))
+            Spacer(Modifier.height(Spacing.sm))
             if (searchState.items.isEmpty()) {
                 Text(
-                    text = "No matches behind the veil for “${searchState.query}”.",
+                    text = stringResource(R.string.search_no_match, searchState.query),
                     style = MaterialTheme.typography.bodySmall,
+                    fontStyle = FontStyle.Italic,
+                    fontFamily = VeilSerif,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             } else {
                 Text(
-                    text = if (searchState.items.size == 1) {
-                        "1 match"
-                    } else {
-                        "${searchState.items.size} matches"
-                    },
+                    text = pluralStringResource(
+                        R.plurals.match_count,
+                        searchState.items.size,
+                        searchState.items.size,
+                    ),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                Spacer(Modifier.height(8.dp))
+                Spacer(Modifier.height(Spacing.sm))
                 searchState.items.forEach { item ->
                     VaultItemRow(
                         item = item,
-                        subtitle = categoryNameFor(item.categoryId),
+                        meta = categoryNameFor(item.categoryId),
                         onClick = { onOpenItem(item.id) },
                     )
                     SearchEngine.matchSummary(item, searchState.query)?.let { summary ->
@@ -570,14 +588,14 @@ internal fun SearchResultsSection(
                         Text(
                             text = summary,
                             style = MaterialTheme.typography.labelSmall,
-                            fontFamily = FontFamily.Serif,
+                            fontFamily = VeilSerif,
                             fontStyle = FontStyle.Italic,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                         )
                     }
-                    Spacer(Modifier.height(8.dp))
+                    Spacer(Modifier.height(Spacing.sm))
                 }
             }
         }

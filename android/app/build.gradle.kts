@@ -35,6 +35,11 @@ dependencies {
     implementation("androidx.activity:activity-compose:1.9.3")
     implementation("androidx.biometric:biometric:1.1.0")
     implementation("androidx.compose.material3:material3")
+    // Sprint 9 (UI polish): official Compose Material icons — extended set for
+    // the consistent Icons.Outlined style across screens. Version comes from the
+    // compose BOM above (no explicit version). This is the one authorized new
+    // dependency for Sprint 9 (spec-1.md §G.7).
+    implementation("androidx.compose.material:material-icons-extended")
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.ui:ui-tooling-preview")
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.7")

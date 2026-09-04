@@ -1,5 +1,6 @@
 package com.veilkeepers.app.ui
 
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -26,15 +27,20 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
+import com.veilkeepers.app.R
 import com.veilkeepers.app.auth.AuthUiState
+import com.veilkeepers.app.ui.components.BrandMark
+import com.veilkeepers.app.ui.theme.Spacing
 
 /**
  * Login screen: Server URL, username, password. Progress distinguishes
- * "deriving keys" (local Argon2id) from "loading" (network).
+ * "deriving keys" (local Argon2id) from "loading" (network). All copy comes
+ * from resources; rhythm uses the shared spacing tokens (Sprint 9).
  */
 @Composable
 fun LoginScreen(
@@ -58,27 +64,29 @@ fun LoginScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .verticalScroll(rememberScrollState())
-                .padding(horizontal = 24.dp, vertical = 32.dp),
+                .padding(horizontal = Spacing.lg, vertical = Spacing.xl),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            Spacer(Modifier.height(24.dp))
+            Spacer(Modifier.height(Spacing.lg))
+            BrandMark()
+            Spacer(Modifier.height(Spacing.md))
             Text(
-                text = "VEIL KEEPERS",
+                text = stringResource(R.string.brand_title),
                 style = MaterialTheme.typography.headlineMedium,
                 color = MaterialTheme.colorScheme.primary,
             )
             Text(
-                text = "Keep your secrets behind the veil",
+                text = stringResource(R.string.login_subtitle),
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            Spacer(Modifier.height(32.dp))
+            Spacer(Modifier.height(Spacing.xl))
 
             OutlinedTextField(
                 value = serverUrl,
                 onValueChange = onServerUrlChange,
-                label = { Text("Server URL") },
-                placeholder = { Text("http://192.168.50.131:18080") },
+                label = { Text(stringResource(R.string.field_server_url)) },
+                placeholder = { Text(stringResource(R.string.field_server_url_placeholder)) },
                 singleLine = true,
                 enabled = !busy,
                 keyboardOptions = KeyboardOptions(
@@ -87,21 +95,21 @@ fun LoginScreen(
                 ),
                 modifier = Modifier.fillMaxWidth(),
             )
-            Spacer(Modifier.height(12.dp))
+            Spacer(Modifier.height(Spacing.md))
             OutlinedTextField(
                 value = username,
                 onValueChange = onUsernameChange,
-                label = { Text("Username") },
+                label = { Text(stringResource(R.string.field_username)) },
                 singleLine = true,
                 enabled = !busy,
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
                 modifier = Modifier.fillMaxWidth(),
             )
-            Spacer(Modifier.height(12.dp))
+            Spacer(Modifier.height(Spacing.md))
             OutlinedTextField(
                 value = password,
                 onValueChange = { password = it },
-                label = { Text("Master password") },
+                label = { Text(stringResource(R.string.field_master_password)) },
                 singleLine = true,
                 enabled = !busy,
                 visualTransformation = PasswordVisualTransformation(),
@@ -113,7 +121,7 @@ fun LoginScreen(
             )
 
             (state as? AuthUiState.Error)?.let { error ->
-                Spacer(Modifier.height(16.dp))
+                Spacer(Modifier.height(Spacing.md))
                 Text(
                     text = error.message,
                     color = MaterialTheme.colorScheme.error,
@@ -121,7 +129,7 @@ fun LoginScreen(
                 )
             }
 
-            Spacer(Modifier.height(24.dp))
+            Spacer(Modifier.height(Spacing.lg))
             Button(
                 onClick = {
                     onLogin(password.toCharArray())
@@ -129,28 +137,40 @@ fun LoginScreen(
                 },
                 enabled = !busy && serverUrl.isNotBlank() &&
                     username.isNotBlank() && password.isNotEmpty(),
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(50.dp),
             ) {
                 if (busy) {
                     CircularProgressIndicator(
                         modifier = Modifier.size(18.dp),
                         strokeWidth = 2.dp,
+                        color = MaterialTheme.colorScheme.onPrimary,
                     )
-                    Spacer(Modifier.width(12.dp))
-                    Text(if (state is AuthUiState.Deriving) "Deriving keys…" else "Signing in…")
+                    Spacer(Modifier.width(Spacing.sm))
+                    Text(
+                        if (state is AuthUiState.Deriving) {
+                            stringResource(R.string.progress_deriving_keys)
+                        } else {
+                            stringResource(R.string.login_progress_signing_in)
+                        },
+                    )
                 } else {
-                    Text("Unlock")
+                    Text(stringResource(R.string.login_submit))
                 }
             }
-            Spacer(Modifier.height(8.dp))
-            Row(verticalAlignment = Alignment.CenterVertically) {
+            Spacer(Modifier.height(Spacing.sm))
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.Center,
+            ) {
                 Text(
-                    text = "No account yet?",
+                    text = stringResource(R.string.login_no_account),
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 TextButton(onClick = onSwitchToRegister, enabled = !busy) {
-                    Text("Create one")
+                    Text(stringResource(R.string.login_create_one))
                 }
             }
         }

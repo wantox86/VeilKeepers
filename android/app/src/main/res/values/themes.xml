@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+      Window theme ONLY. Every screen is drawn by Compose (VeilKeepersTheme →
+      MaterialTheme), so this style exists for two jobs:
+        1. Paint android:windowBackground with the vault's cream before Compose
+           composes, removing the cold-start flash (spec.md §27).
+        2. Colour the system status/navigation bars to match.
+      The parent is the FRAMEWORK light theme (available since API 21) — we add
+      no appcompat / material-components XML dependency to the classpath. The
+      dark counterpart in values-night/ overrides both the parent and the bars.
+    -->
+    <style name="Theme.VeilKeepers" parent="@android:style/Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">@color/veil_window_background</item>
+        <item name="android:statusBarColor">@color/veil_status_bar</item>
+        <item name="android:navigationBarColor">@color/veil_window_background</item>
+        <item name="android:windowLightStatusBar">true</item>
+    </style>
+</resources>

@@ -9,9 +9,13 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Fingerprint
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -25,19 +29,24 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.veilkeepers.app.R
 import com.veilkeepers.app.auth.AuthUiState
+import com.veilkeepers.app.ui.components.SectionHeader
+import com.veilkeepers.app.ui.theme.Spacing
+import com.veilkeepers.app.ui.theme.VeilSerif
 
 /**
  * Sprint 6 unlock screen (soft auto-lock / cold start with a live session):
  * master password unlock via OFFLINE KEK derivation (network fallback inside
  * the ViewModel) plus an opt-in "Unlock with biometrics" affordance that
  * releases the locally wrapped VK — never touching the backend (spec.md §25).
- * Stateless — all data in, all events out.
+ * Stateless — all data in, all events out. Layout gaps use spacing tokens;
+ * control sizes (button height, icon box) stay explicit.
  */
 @Composable
 fun UnlockScreen(
@@ -59,47 +68,47 @@ fun UnlockScreen(
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(horizontal = 28.dp, vertical = 24.dp),
+                .padding(horizontal = Spacing.lg, vertical = Spacing.lg),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center,
         ) {
             Text(
-                text = "THE VEIL FELL",
+                text = stringResource(R.string.unlock_title),
                 style = MaterialTheme.typography.titleLarge,
                 letterSpacing = 4.sp,
                 color = MaterialTheme.colorScheme.primary,
             )
-            Spacer(Modifier.height(6.dp))
+            Spacer(Modifier.height(Spacing.xs))
             Text(
-                text = "your vault locked itself while you were away",
+                text = stringResource(R.string.unlock_subtitle),
                 style = MaterialTheme.typography.bodySmall,
                 fontStyle = FontStyle.Italic,
-                fontFamily = FontFamily.Serif,
+                fontFamily = VeilSerif,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
 
-            Spacer(Modifier.height(28.dp))
+            Spacer(Modifier.height(Spacing.lg))
 
             Surface(
                 modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(14.dp),
+                shape = MaterialTheme.shapes.large,
                 color = MaterialTheme.colorScheme.surfaceVariant,
                 border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.7f)),
             ) {
-                Column(Modifier.padding(20.dp)) {
-                    SectionLabel("Unlock")
-                    Spacer(Modifier.height(10.dp))
+                Column(Modifier.padding(Spacing.md)) {
+                    SectionHeader(stringResource(R.string.unlock_section))
+                    Spacer(Modifier.height(Spacing.sm))
 
                     OutlinedTextField(
                         value = password,
                         onValueChange = { password = it },
-                        label = { Text("Master password") },
+                        label = { Text(stringResource(R.string.field_master_password)) },
                         singleLine = true,
                         visualTransformation = PasswordVisualTransformation(),
                         enabled = !busy,
                         modifier = Modifier.fillMaxWidth(),
                     )
-                    Spacer(Modifier.height(12.dp))
+                    Spacer(Modifier.height(Spacing.md))
 
                     Button(
                         onClick = {
@@ -108,24 +117,40 @@ fun UnlockScreen(
                             onUnlockWithPassword(chars)
                         },
                         enabled = !busy && password.isNotEmpty(),
-                        modifier = Modifier.fillMaxWidth(),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(50.dp),
                     ) {
-                        Text(if (busy) "Lifting the veil…" else "Unlock vault")
+                        Text(
+                            if (busy) {
+                                stringResource(R.string.progress_lifting_veil)
+                            } else {
+                                stringResource(R.string.unlock_submit)
+                            },
+                        )
                     }
 
                     if (biometricAvailable) {
-                        Spacer(Modifier.height(10.dp))
+                        Spacer(Modifier.height(Spacing.sm))
                         OutlinedButton(
                             onClick = onUnlockWithBiometric,
                             enabled = !busy,
-                            modifier = Modifier.fillMaxWidth(),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(50.dp),
                         ) {
-                            Text("Unlock with biometrics")
+                            Icon(
+                                imageVector = Icons.Outlined.Fingerprint,
+                                contentDescription = null,
+                                modifier = Modifier.size(20.dp),
+                            )
+                            Spacer(Modifier.width(Spacing.sm))
+                            Text(stringResource(R.string.unlock_biometric))
                         }
                     }
 
                     if (busy) {
-                        Spacer(Modifier.height(14.dp))
+                        Spacer(Modifier.height(Spacing.md))
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             verticalAlignment = Alignment.CenterVertically,
@@ -137,7 +162,7 @@ fun UnlockScreen(
 
                     val errorMessage = (state as? AuthUiState.Error)?.message
                     if (errorMessage != null) {
-                        Spacer(Modifier.height(14.dp))
+                        Spacer(Modifier.height(Spacing.md))
                         Text(
                             text = errorMessage,
                             style = MaterialTheme.typography.bodyMedium,
@@ -145,7 +170,7 @@ fun UnlockScreen(
                         )
                     }
                     if (biometricNotice != null) {
-                        Spacer(Modifier.height(14.dp))
+                        Spacer(Modifier.height(Spacing.md))
                         Text(
                             text = biometricNotice,
                             style = MaterialTheme.typography.bodyMedium,
@@ -155,15 +180,15 @@ fun UnlockScreen(
                 }
             }
 
-            Spacer(Modifier.height(20.dp))
+            Spacer(Modifier.height(Spacing.lg))
             Text(
-                text = "Your session stays signed in — locking only clears the vault key from memory.",
+                text = stringResource(R.string.unlock_session_note),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            Spacer(Modifier.height(12.dp))
+            Spacer(Modifier.height(Spacing.sm))
             TextButton(onClick = onSignOut, enabled = !busy) {
-                Text("Sign out instead")
+                Text(stringResource(R.string.unlock_sign_out))
             }
         }
     }

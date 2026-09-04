@@ -1,5 +1,6 @@
-package com.veilkeepers.app.ui
+package com.veilkeepers.app.ui.components
 
+import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -21,10 +22,14 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import com.veilkeepers.app.R
+import com.veilkeepers.app.ui.theme.Spacing
+import com.veilkeepers.app.ui.theme.VeilSerif
 import com.veilkeepers.app.vault.VaultRepository
 import com.veilkeepers.app.vault.attach.AttachmentPreview
 import com.veilkeepers.app.vault.attach.AttachmentUiState
@@ -36,6 +41,9 @@ import com.veilkeepers.app.vault.attach.ImageCompressor
  * image bytes are NEVER auto-downloaded: tapping Preview fetches + decrypts a
  * single attachment on demand, so nothing plaintext sits in memory until the
  * user explicitly opens it (spec-1.md §F row 8). Stateless: all events out.
+ *
+ * Sprint 9: shared component, resource-backed copy, spacing tokens, and an
+ * [animateContentSize] so the section eases open as it goes loading → list.
  */
 @Composable
 fun AttachmentsSection(
@@ -44,9 +52,13 @@ fun AttachmentsSection(
     onDelete: (attachmentId: Long) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    Column(modifier.fillMaxWidth()) {
-        SectionLabel("Attachments")
-        Spacer(Modifier.height(8.dp))
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .animateContentSize(),
+    ) {
+        SectionHeader(stringResource(R.string.section_attachments))
+        Spacer(Modifier.height(Spacing.sm))
 
         if (state.error != null) {
             Text(
@@ -54,7 +66,7 @@ fun AttachmentsSection(
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.error,
             )
-            Spacer(Modifier.height(6.dp))
+            Spacer(Modifier.height(Spacing.xs + 2.dp))
         }
 
         when {
@@ -64,29 +76,30 @@ fun AttachmentsSection(
                     strokeWidth = 2.dp,
                     color = MaterialTheme.colorScheme.primary,
                 )
-                Spacer(Modifier.padding(start = 10.dp))
+                Spacer(Modifier.padding(start = Spacing.sm + 2.dp))
                 Text(
-                    text = "Loading attachments…",
+                    text = stringResource(R.string.attachments_loading),
                     style = MaterialTheme.typography.bodySmall,
                     fontStyle = FontStyle.Italic,
-                    fontFamily = androidx.compose.ui.text.font.FontFamily.Serif,
+                    fontFamily = VeilSerif,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
 
             state.attachments.isEmpty() -> Text(
-                text = "No attachments.",
+                text = stringResource(R.string.attachments_empty),
                 style = MaterialTheme.typography.bodyMedium,
                 fontStyle = FontStyle.Italic,
-                fontFamily = androidx.compose.ui.text.font.FontFamily.Serif,
+                fontFamily = VeilSerif,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
 
             else -> state.attachments.forEach { attachment ->
                 AttachmentRow(
                     filename = attachment.filename,
-                    detail = attachment.mimeType + " · " + humanBytes(attachment.size) +
-                        " · " + attachment.createdAt.take(10),
+                    mimeType = attachment.mimeType,
+                    size = attachment.size,
+                    createdAt = attachment.createdAt,
                     undecryptable = attachment.filename == VaultRepository.UNDECRYPTABLE,
                     busy = state.busy,
                     onPreview = { onPreview(attachment.id, attachment.mimeType) },
@@ -96,19 +109,19 @@ fun AttachmentsSection(
         }
 
         if (state.busy && !state.loading) {
-            Spacer(Modifier.height(6.dp))
+            Spacer(Modifier.height(Spacing.xs + 2.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {
                 CircularProgressIndicator(
                     modifier = Modifier.height(14.dp),
                     strokeWidth = 2.dp,
                     color = MaterialTheme.colorScheme.primary,
                 )
-                Spacer(Modifier.padding(start = 10.dp))
+                Spacer(Modifier.padding(start = Spacing.sm + 2.dp))
                 Text(
-                    text = "Working…",
+                    text = stringResource(R.string.attachments_working),
                     style = MaterialTheme.typography.bodySmall,
                     fontStyle = FontStyle.Italic,
-                    fontFamily = androidx.compose.ui.text.font.FontFamily.Serif,
+                    fontFamily = VeilSerif,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
@@ -119,13 +132,20 @@ fun AttachmentsSection(
 @Composable
 private fun AttachmentRow(
     filename: String,
-    detail: String,
+    mimeType: String,
+    size: Long,
+    createdAt: String,
     undecryptable: Boolean,
     busy: Boolean,
     onPreview: () -> Unit,
     onDelete: () -> Unit,
 ) {
-    Column(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+    val detail = "$mimeType · ${humanBytes(size)} · ${createdAt.take(10)}"
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .padding(vertical = Spacing.xs),
+    ) {
         Row(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
@@ -134,7 +154,7 @@ private fun AttachmentRow(
                 Text(
                     text = filename,
                     style = MaterialTheme.typography.bodyLarge,
-                    fontFamily = androidx.compose.ui.text.font.FontFamily.Serif,
+                    fontFamily = VeilSerif,
                     color = if (undecryptable) {
                         MaterialTheme.colorScheme.error
                     } else {
@@ -147,16 +167,20 @@ private fun AttachmentRow(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
-            TextButton(onClick = onPreview, enabled = !busy && !undecryptable) { Text("Preview") }
-            TextButton(onClick = onDelete, enabled = !busy) { Text("Delete") }
+            TextButton(onClick = onPreview, enabled = !busy && !undecryptable) {
+                Text(stringResource(R.string.action_preview))
+            }
+            TextButton(onClick = onDelete, enabled = !busy) {
+                Text(stringResource(R.string.action_delete))
+            }
         }
     }
 }
 
 /**
  * Full-screen preview dialog: decrypts nothing here (bytes are already
- * plaintext in [preview]) — it only decodes them to a downsampled [android.graphics.Bitmap]
- * and renders. FLAG_SECURE on the host activity covers this dialog, so the
+ * plaintext in [preview]) — it only decodes them to a downsampled bitmap and
+ * renders. FLAG_SECURE on the host activity covers this dialog, so the
  * revealed image cannot be screenshotted or seen in recents.
  */
 @Composable
@@ -169,37 +193,44 @@ fun AttachmentPreviewDialog(preview: AttachmentPreview, onDismiss: () -> Unit) {
         properties = DialogProperties(usePlatformDefaultWidth = false),
     ) {
         Surface(
-            modifier = Modifier.fillMaxWidth().padding(16.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(Spacing.md),
             shape = RoundedCornerShape(14.dp),
             color = MaterialTheme.colorScheme.surface,
         ) {
             Column(
-                modifier = Modifier.padding(16.dp),
+                modifier = Modifier.padding(Spacing.md),
                 horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(12.dp),
+                verticalArrangement = Arrangement.spacedBy(Spacing.sm + 4.dp),
             ) {
                 if (bitmap != null) {
                     Image(
                         bitmap = bitmap.asImageBitmap(),
-                        contentDescription = null,
-                        modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)),
+                        contentDescription = stringResource(R.string.cd_attachment_preview),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(8.dp)),
                     )
                 } else {
                     Text(
-                        text = "This image could not be rendered.",
+                        text = stringResource(R.string.attachments_render_error),
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.error,
                     )
                 }
-                Button(onClick = onDismiss, modifier = Modifier.fillMaxWidth()) { Text("Close") }
+                Button(onClick = onDismiss, modifier = Modifier.fillMaxWidth()) {
+                    Text(stringResource(R.string.action_close))
+                }
             }
         }
     }
 }
 
 /** Compact human-readable byte count (ciphertext size as stored on the server). */
+@Composable
 private fun humanBytes(size: Long): String = when {
-    size >= 1_048_576 -> "${(size + 524_288) / 1_048_576} MB"
-    size >= 1_024 -> "${(size + 512) / 1_024} KB"
-    else -> "$size B"
+    size >= 1_048_576 -> stringResource(R.string.bytes_mb, (size + 524_288) / 1_048_576)
+    size >= 1_024 -> stringResource(R.string.bytes_kb, (size + 512) / 1_024)
+    else -> stringResource(R.string.bytes_b, size)
 }

@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Dark mode window theme: near-black violet background + dark framework
+         parent (light system-bar icons). See values/themes.xml for rationale. -->
+    <style name="Theme.VeilKeepers" parent="@android:style/Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/veil_window_background</item>
+        <item name="android:statusBarColor">@color/veil_status_bar</item>
+        <item name="android:navigationBarColor">@color/veil_window_background</item>
+        <item name="android:windowLightStatusBar">false</item>
+    </style>
+</resources>

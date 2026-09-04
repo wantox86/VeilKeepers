@@ -9,20 +9,15 @@ import android.os.Looper
 import android.os.SystemClock
 import android.view.WindowManager
 import androidx.activity.compose.setContent
-import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.animation.Crossfade
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -37,7 +32,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.unit.dp
+import androidx.compose.ui.res.stringResource
 import androidx.fragment.app.FragmentActivity
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.ViewModelStore
@@ -60,6 +55,9 @@ import com.veilkeepers.app.ui.LoginScreen
 import com.veilkeepers.app.ui.RegisterScreen
 import com.veilkeepers.app.ui.UnlockScreen
 import com.veilkeepers.app.ui.VaultHomeScreen
+import com.veilkeepers.app.ui.components.ErrorState
+import com.veilkeepers.app.ui.components.LoadingState
+import com.veilkeepers.app.ui.theme.VeilKeepersTheme
 import com.veilkeepers.app.vault.VaultUiState
 import com.veilkeepers.app.vault.VaultViewModel
 import com.veilkeepers.app.vault.attach.AttachmentViewModel
@@ -110,7 +108,7 @@ class MainActivity : FragmentActivity(), Application.ActivityLifecycleCallbacks 
         val viewModel = ViewModelProvider(this, AuthViewModel.factory(storage))[AuthViewModel::class.java]
 
         setContent {
-            MaterialTheme(colorScheme = VeilTheme) {
+            VeilKeepersTheme {
                 AppRoot(viewModel, storage, autoLock, biometricController, this)
             }
         }
@@ -173,22 +171,6 @@ private object ElapsedRealtimeClock : Clock {
     override fun millis(): Long = SystemClock.elapsedRealtime()
 }
 
-/** Deep "behind the veil" palette: near-black violet + candlelight amber. */
-private val VeilTheme = darkColorScheme(
-    primary = Color(0xFFE8B04B),
-    onPrimary = Color(0xFF2B1D00),
-    background = Color(0xFF121019),
-    onBackground = Color(0xFFE7E1F2),
-    surface = Color(0xFF1A1723),
-    onSurface = Color(0xFFE7E1F2),
-    surfaceVariant = Color(0xFF262130),
-    onSurfaceVariant = Color(0xFFB3ABC7),
-    outline = Color(0xFF4A4358),
-    error = Color(0xFFF2A0A0),
-    errorContainer = Color(0xFF4A1F1F),
-    onErrorContainer = Color(0xFFFFD9D9),
-)
-
 private enum class AuthScreen { LOGIN, REGISTER }
 
 @Composable
@@ -211,6 +193,8 @@ private fun AppRoot(
     var settingsNotice by remember { mutableStateOf<String?>(null) }
     var biometricNotice by remember { mutableStateOf<String?>(null) }
     val biometricHardware = remember { biometricController.hardwareAvailable() }
+    val biometricEnabledNotice = stringResource(R.string.settings_biometric_enabled)
+    val biometricDisabledNotice = stringResource(R.string.settings_biometric_disabled)
 
     // Every successful unlock re-arms the auto-lock state machine.
     LaunchedEffect(state) {
@@ -259,7 +243,7 @@ private fun AppRoot(
                     s.vaultKey,
                     onSuccess = {
                         biometricEnabled = true
-                        settingsNotice = "Biometric unlock enabled."
+                        settingsNotice = biometricEnabledNotice
                     },
                     onError = { message -> settingsNotice = message },
                 )
@@ -267,7 +251,7 @@ private fun AppRoot(
             onDisableBiometric = {
                 biometricController.disable()
                 biometricEnabled = false
-                settingsNotice = "Biometric unlock disabled."
+                settingsNotice = biometricDisabledNotice
             },
             onUnlockWithPassword = viewModel::unlockWithPassword,
             onUnlockWithBiometric = {
@@ -315,31 +299,35 @@ private fun AppRoot(
             },
         )
 
-        screen == AuthScreen.REGISTER -> RegisterScreen(
-            serverUrl = serverUrl,
-            onServerUrlChange = viewModel::onServerUrlChange,
-            username = username,
-            onUsernameChange = viewModel::onUsernameChange,
-            state = state,
-            onRegister = viewModel::register,
-            onSwitchToLogin = {
-                viewModel.clearError()
-                screen = AuthScreen.LOGIN
-            },
-        )
+        else -> Crossfade(targetState = screen, label = "authScreen") { target ->
+            when (target) {
+                AuthScreen.REGISTER -> RegisterScreen(
+                    serverUrl = serverUrl,
+                    onServerUrlChange = viewModel::onServerUrlChange,
+                    username = username,
+                    onUsernameChange = viewModel::onUsernameChange,
+                    state = state,
+                    onRegister = viewModel::register,
+                    onSwitchToLogin = {
+                        viewModel.clearError()
+                        screen = AuthScreen.LOGIN
+                    },
+                )
 
-        else -> LoginScreen(
-            serverUrl = serverUrl,
-            onServerUrlChange = viewModel::onServerUrlChange,
-            username = username,
-            onUsernameChange = viewModel::onUsernameChange,
-            state = state,
-            onLogin = viewModel::login,
-            onSwitchToRegister = {
-                viewModel.clearError()
-                screen = AuthScreen.REGISTER
-            },
-        )
+                AuthScreen.LOGIN -> LoginScreen(
+                    serverUrl = serverUrl,
+                    onServerUrlChange = viewModel::onServerUrlChange,
+                    username = username,
+                    onUsernameChange = viewModel::onUsernameChange,
+                    state = state,
+                    onLogin = viewModel::login,
+                    onSwitchToRegister = {
+                        viewModel.clearError()
+                        screen = AuthScreen.REGISTER
+                    },
+                )
+            }
+        }
     }
 }
 
@@ -424,6 +412,7 @@ private fun VaultRoot(
     val searchQuery by searchViewModel.rawQuery.collectAsState()
     val searchState by searchViewModel.searchState.collectAsState()
     val attachmentState by attachmentViewModel.uiState.collectAsState()
+    val uncategorizedLabel = stringResource(R.string.label_uncategorized)
     // Capture once: a delegated property cannot be smart-cast after `is`.
     val s = state
 
@@ -545,7 +534,7 @@ private fun VaultRoot(
                             item = item,
                             categoryName = loaded.categories
                                 .firstOrNull { it.id == item.categoryId }?.name
-                                ?: "Uncategorized",
+                                ?: uncategorizedLabel,
                             onBack = { screen = returnScreen },
                             onEdit = { id ->
                                 editItemId = id
@@ -613,38 +602,16 @@ private fun VaultRoot(
                 }
             }
 
-            state is VaultUiState.Loading -> Column(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(24.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.Center,
-            ) {
-                CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
-                Spacer(Modifier.height(16.dp))
-                Text(
-                    text = "Lifting the veil…",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
+            state is VaultUiState.Loading -> LoadingState(
+                message = stringResource(R.string.progress_lifting_veil),
+                modifier = Modifier.fillMaxSize(),
+            )
 
-            s is VaultUiState.Error -> Column(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(24.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.Center,
-            ) {
-                Text(
-                    text = s.message,
-                    style = MaterialTheme.typography.bodyLarge,
-                    color = MaterialTheme.colorScheme.error,
-                )
-                Spacer(Modifier.height(16.dp))
-                // Explicit retry affordance — never automatic.
-                Button(onClick = viewModel::reload) { Text("Try again") }
-            }
+            s is VaultUiState.Error -> ErrorState(
+                message = s.message,
+                onRetry = viewModel::reload,
+                modifier = Modifier.fillMaxSize(),
+            )
 
             else -> {
                 // Locked / SessionExpired: the LaunchedEffect above routes
@@ -680,15 +647,14 @@ private fun VaultRoot(
         if (overlayError != null && overlayError.previous != null) {
             AlertDialog(
                 onDismissRequest = viewModel::dismissError,
-                title = { Text("Something went wrong") },
+                title = { Text(stringResource(R.string.vault_error_dialog_title)) },
                 text = {
-                    Text(
-                        overlayError.message +
-                            " Your vault is unchanged; try again when ready.",
-                    )
+                    Text(stringResource(R.string.vault_error_dialog_body, overlayError.message))
                 },
                 confirmButton = {
-                    Button(onClick = viewModel::dismissError) { Text("OK") }
+                    Button(onClick = viewModel::dismissError) {
+                        Text(stringResource(R.string.action_ok))
+                    }
                 },
             )
         }

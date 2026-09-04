@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Night override: near-black violet window so a cold start in dark mode
+         never flashes white. Launcher-icon colors are intentionally absent
+         here (constant across modes). -->
+    <color name="veil_window_background">#121019</color>
+    <color name="veil_status_bar">#121019</color>
+</resources>

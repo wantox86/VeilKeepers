@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+      Cold-start window background. Mirrors the light vault background so the
+      window is already cream before Compose draws its first frame — this is
+      what removes the flash-of-white on launch (spec.md §27). Overridden in
+      values-night to the near-black violet.
+    -->
+    <color name="veil_window_background">#FBF7F0</color>
+    <color name="veil_status_bar">#FBF7F0</color>
+
+    <!-- Adaptive launcher icon tones (mirror ui/theme/Color.kt). The icon is
+         deliberately NOT night-aware: a launcher glyph must stay constant. -->
+    <color name="ic_launcher_background">#121019</color>
+    <color name="ic_launcher_foreground">#E8B04B</color>
+</resources>
