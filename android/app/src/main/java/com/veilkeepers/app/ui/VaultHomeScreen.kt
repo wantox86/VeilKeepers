@@ -93,6 +93,8 @@ fun VaultHomeScreen(
     onCreateCategory: (name: String) -> Unit,
     onLockAndSignOut: () -> Unit,
     onDismissHasMore: () -> Unit,
+    onChangePassword: () -> Unit,
+    onDevices: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     var showNewCategory by remember { mutableStateOf(false) }
@@ -300,6 +302,14 @@ fun VaultHomeScreen(
             onBiometricToggle = { enable ->
                 if (enable) onEnableBiometric() else onDisableBiometric()
             },
+            onChangePassword = {
+                showSettings = false
+                onChangePassword()
+            },
+            onDevices = {
+                showSettings = false
+                onDevices()
+            },
             onDismiss = { showSettings = false },
         )
     }
@@ -320,6 +330,8 @@ internal fun VaultSettingsDialog(
     notice: String?,
     onAutoLockPolicyChange: (AutoLockPolicy) -> Unit,
     onBiometricToggle: (enable: Boolean) -> Unit,
+    onChangePassword: () -> Unit,
+    onDevices: () -> Unit,
     onDismiss: () -> Unit,
 ) {
     AlertDialog(
@@ -327,6 +339,28 @@ internal fun VaultSettingsDialog(
         title = { Text(stringResource(R.string.settings_title)) },
         text = {
             Column(Modifier.fillMaxWidth()) {
+                SectionHeader(stringResource(R.string.settings_account))
+                Spacer(Modifier.height(Spacing.xs))
+                TextButton(
+                    onClick = onChangePassword,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text(
+                        text = stringResource(R.string.settings_change_password),
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+                TextButton(
+                    onClick = onDevices,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text(
+                        text = stringResource(R.string.settings_devices),
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+
+                Spacer(Modifier.height(Spacing.sm + 4.dp))
                 SectionHeader(stringResource(R.string.settings_auto_lock))
                 Spacer(Modifier.height(Spacing.xs))
                 AutoLockPolicy.entries.forEach { option ->

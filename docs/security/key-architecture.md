@@ -141,6 +141,10 @@ reverse-proxy HTTPS per spec.md §43.
     toggle are wiped and the app falls back to password unlock — silently, with
     no error detail surfaced. Disabling the toggle or signing out deletes both
     the blob and the Keystore alias.
+  - Password change (Sprint 11, `PUT /api/v1/auth/password`) does NOT affect
+    the biometric blob: the VK is unchanged, so the Keystore-wrapped copy
+    remains valid. The user does NOT need to re-enroll biometrics after
+    changing their password.
 - Soft auto-lock (Sprint 6, spec.md §24): after the configured timeout
   (Immediately [default] / 1 / 5 / 15 minutes) in background the VK is
   zeroized in memory — the server session is NOT revoked. The user re-enters

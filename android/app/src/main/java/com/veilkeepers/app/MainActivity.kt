@@ -40,6 +40,7 @@ import androidx.lifecycle.ViewModelStoreOwner
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.veilkeepers.app.auth.AuthUiState
 import com.veilkeepers.app.auth.AuthViewModel
+import com.veilkeepers.app.auth.AccountViewModel
 import com.veilkeepers.app.auth.BiometricUnlockController
 import com.veilkeepers.app.crypto.AndroidBiometricKeyStore
 import com.veilkeepers.app.crypto.BiometricVaultCore
@@ -49,6 +50,8 @@ import com.veilkeepers.app.security.AutoLockController
 import com.veilkeepers.app.security.AutoLockPolicy
 import com.veilkeepers.app.security.Clock
 import com.veilkeepers.app.ui.CategoryScreen
+import com.veilkeepers.app.ui.ChangePasswordScreen
+import com.veilkeepers.app.ui.DevicesScreen
 import com.veilkeepers.app.ui.ItemDetailScreen
 import com.veilkeepers.app.ui.ItemEditScreen
 import com.veilkeepers.app.ui.LoginScreen
@@ -332,7 +335,7 @@ private fun AppRoot(
 }
 
 /** Vault root screens; switched by plain [remember] state, no navigation library. */
-private enum class VaultScreen { HOME, CATEGORY, ITEM_DETAIL, ITEM_EDIT }
+private enum class VaultScreen { HOME, CATEGORY, ITEM_DETAIL, ITEM_EDIT, CHANGE_PASSWORD, DEVICES }
 
 /**
  * Sprint 5 vault root: hosts the [VaultViewModel] (keyed by a per-unlock
@@ -407,11 +410,21 @@ private fun VaultRoot(
         viewModelStoreOwner = vaultStoreOwner,
         factory = AttachmentViewModel.factory(vaultKey, storage),
     )
+    // Sprint 11 account management: change password + devices. Same
+    // generation-keyed store so it's cleared on every unlock.
+    val accountViewModel: AccountViewModel = viewModel(
+        key = "vault-account-$unlockGeneration",
+        viewModelStoreOwner = vaultStoreOwner,
+        factory = AccountViewModel.factory(storage, vaultKey),
+    )
     val scope = rememberCoroutineScope()
     val state by viewModel.uiState.collectAsState()
     val searchQuery by searchViewModel.rawQuery.collectAsState()
     val searchState by searchViewModel.searchState.collectAsState()
     val attachmentState by attachmentViewModel.uiState.collectAsState()
+    val changePasswordState by accountViewModel.changePasswordState.collectAsState()
+    val devicesState by accountViewModel.devicesState.collectAsState()
+    val revokingDeviceId by accountViewModel.revokingDeviceId.collectAsState()
     val uncategorizedLabel = stringResource(R.string.label_uncategorized)
     // Capture once: a delegated property cannot be smart-cast after `is`.
     val s = state
@@ -495,6 +508,8 @@ private fun VaultRoot(
                     onCreateCategory = viewModel::createCategory,
                     onLockAndSignOut = viewModel::lockAndLogout,
                     onDismissHasMore = viewModel::dismissHasMoreWarning,
+                    onChangePassword = { screen = VaultScreen.CHANGE_PASSWORD },
+                    onDevices = { screen = VaultScreen.DEVICES },
                 )
 
                 VaultScreen.CATEGORY -> CategoryScreen(
@@ -600,6 +615,25 @@ private fun VaultRoot(
                         },
                     )
                 }
+
+                VaultScreen.CHANGE_PASSWORD -> ChangePasswordScreen(
+                    state = changePasswordState,
+                    onChangePassword = accountViewModel::changePassword,
+                    onDismissResult = accountViewModel::dismissChangePasswordResult,
+                    onBack = {
+                        accountViewModel.dismissChangePasswordResult()
+                        screen = VaultScreen.HOME
+                    },
+                )
+
+                VaultScreen.DEVICES -> DevicesScreen(
+                    state = devicesState,
+                    revokingDeviceId = revokingDeviceId,
+                    currentSessionDeviceId = null,
+                    onLoadDevices = accountViewModel::loadDevices,
+                    onRevokeDevice = accountViewModel::revokeDevice,
+                    onBack = { screen = VaultScreen.HOME },
+                )
             }
 
             state is VaultUiState.Loading -> LoadingState(

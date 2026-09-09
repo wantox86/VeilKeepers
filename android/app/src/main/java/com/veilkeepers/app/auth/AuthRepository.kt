@@ -266,6 +266,101 @@ class AuthRepository(
         storage.clear()
     }
 
+    /**
+     * Change password flow (spec-1.md §A.1 Flow Ganti Password).
+     *
+     * 1. Derive new KEK' from [newPassword] + fresh salt
+     * 2. Derive new verifier'/auth_hash'
+     * 3. Re-wrap [vaultKey] (unchanged, in-memory) with KEK'
+     * 4. Send current + new auth material to the server
+     * 5. On success: update SessionStore cache so offline unlock (Sprint 6)
+     *    works with the new password
+     *
+     * The vault key itself is NOT changed — vault data is not re-encrypted.
+     * The server revokes all other sessions; the caller's session stays alive.
+     */
+    suspend fun changePassword(
+        currentPassword: CharArray,
+        newPassword: CharArray,
+        vaultKey: ByteArray,
+        onPhase: (AuthPhase) -> Unit = {},
+    ) = withContext(Dispatchers.Default) {
+        val base = storage.serverUrl
+        val token = storage.sessionToken
+        if (base.isEmpty() || token.isEmpty()) {
+            throw IllegalStateException("Not logged in")
+        }
+        val api = apiFactory(normalizeUrl(base))
+
+        onPhase(AuthPhase.DERIVING)
+        var currentSalt: ByteArray? = null
+        var currentDerived: ByteArray? = null
+        var currentKek: ByteArray? = null
+        var currentVerifier: ByteArray? = null
+        var currentDigest: ByteArray? = null
+        var newSalt: ByteArray? = null
+        var newDerived: ByteArray? = null
+        var newKek: ByteArray? = null
+        var newVerifier: ByteArray? = null
+        var newDigest: ByteArray? = null
+        var newWrapped: ByteArray? = null
+        try {
+            // Derive current auth_hash for verification.
+            val cachedSaltB64 = storage.kdfSaltB64
+            val cachedParamsJson = storage.kdfParamsJson
+            if (cachedSaltB64.isEmpty() || cachedParamsJson.isEmpty()) {
+                throw IllegalStateException("KDF cache missing for current password verification")
+            }
+            currentSalt = AuthHash.fromBase64(cachedSaltB64)
+            val currentParams = KdfParams.parseFrom(cachedParamsJson)
+            currentDerived = Argon2Kdf.derive(currentPassword, currentSalt, currentParams)
+            val currentSplit = Argon2Kdf.split(currentDerived)
+            currentKek = currentSplit.first
+            currentVerifier = currentSplit.second
+            currentDigest = AuthHash.of(currentVerifier)
+            val currentAuthHashB64 = AuthHash.toBase64(currentDigest)
+
+            // Derive new auth material with a fresh salt.
+            newSalt = Argon2Kdf.randomSalt()
+            newDerived = Argon2Kdf.derive(newPassword, newSalt, kdfParams)
+            val newSplit = Argon2Kdf.split(newDerived)
+            newKek = newSplit.first
+            newVerifier = newSplit.second
+            newDigest = AuthHash.of(newVerifier)
+            val newAuthHashB64 = AuthHash.toBase64(newDigest)
+
+            // Re-wrap VK with new KEK (VK itself does NOT change).
+            newWrapped = VaultKey.wrap(vaultKey, newKek)
+
+            onPhase(AuthPhase.NETWORK)
+            api.changePassword(
+                currentAuthHashB64 = currentAuthHashB64,
+                authHashB64 = newAuthHashB64,
+                kdfSaltB64 = AuthHash.toBase64(newSalt),
+                kdfParams = kdfParams,
+                wrappedVaultKeyB64 = AuthHash.toBase64(newWrapped),
+                bearerToken = token,
+            )
+
+            // Update SessionStore cache so offline unlock works with new password.
+            storage.kdfSaltB64 = AuthHash.toBase64(newSalt)
+            storage.kdfParamsJson = kdfParams.encode()
+            storage.wrappedVaultKeyB64 = AuthHash.toBase64(newWrapped)
+        } finally {
+            currentSalt?.fill(0)
+            currentDerived?.fill(0)
+            currentKek?.fill(0)
+            currentVerifier?.fill(0)
+            currentDigest?.fill(0)
+            newSalt?.fill(0)
+            newDerived?.fill(0)
+            newKek?.fill(0)
+            newVerifier?.fill(0)
+            newDigest?.fill(0)
+            newWrapped?.fill(0)
+        }
+    }
+
     private fun saveSession(baseUrl: String, username: String, login: LoginResult) {
         storage.serverUrl = baseUrl
         storage.username = username

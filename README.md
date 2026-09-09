@@ -44,6 +44,7 @@ Unknown paths return `404 Not Found`; wrong methods on `/health` and `/ready` re
 | POST   | `/api/v1/auth/register`       | —      | Create a user from a client-computed `auth_hash` verifier. `201 {"username":...}`, `403 registration_closed`, `409 username_taken`, `400 invalid_input`. |
 | POST   | `/api/v1/auth/login`          | —      | Exchange credentials for a session. `200 {"session_token","wrapped_vault_key","expires_at"}` or `401 invalid_credentials` (one generic error for unknown user and wrong password alike). |
 | POST   | `/api/v1/auth/logout`         | Bearer | Revoke the caller's session. Idempotent `200`.                                                                 |
+| PUT    | `/api/v1/auth/password`       | Bearer | Change password: verify current, update auth material, revoke all other sessions. `204` or `401 wrong_password`. |
 | GET    | `/api/v1/auth/kdf/{username}` | —      | Fetch the KDF salt and parameters needed to derive a key before login. `200 {"kdf_salt","kdf_params"}` or `404 not_found`. |
 | GET    | `/api/v1/devices`             | Bearer | List the caller's devices.                                                                                      |
 | DELETE | `/api/v1/devices/{id}`        | Bearer | Revoke a device and all of its sessions. Devices owned by other users return `404 not_found`.                   |
@@ -95,6 +96,5 @@ See [`scripts/README.md`](scripts/README.md) for usage, cron scheduling, systemd
 
 ## Not yet implemented (later sprints)
 
-- Password change / vault re-wrap (`PUT /api/v1/auth/password`)
 - TLS/HTTPS via reverse proxy (V0.2+)
 - Container registry and auto-deploy from CI

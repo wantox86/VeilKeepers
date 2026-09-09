@@ -1,5 +1,6 @@
 package com.veilkeepers.app.data
 
+import org.json.JSONArray
 import org.json.JSONException
 import org.json.JSONObject
 import java.io.IOException
@@ -26,6 +27,42 @@ class ApiClient(
     /** GET [path] and parse the 2xx body as JSON. */
     fun getJson(path: String, bearerToken: String? = null): JSONObject =
         execute("GET", path, body = null, bearerToken = bearerToken)
+
+    /** GET [path] and parse the 2xx body as a JSON array. */
+    fun getJsonArray(path: String, bearerToken: String? = null): JSONArray {
+        val root = baseUrl.trim().trimEnd('/')
+        val connection: HttpURLConnection = try {
+            val conn = URL(root + path).openConnection() as HttpURLConnection
+            conn.connectTimeout = connectTimeoutMs
+            conn.readTimeout = readTimeoutMs
+            conn.setRequestProperty("Accept", "application/json")
+            bearerToken?.let { conn.setRequestProperty("Authorization", "Bearer $it") }
+            conn
+        } catch (e: IOException) {
+            throw ApiError.Network(e)
+        } catch (e: ClassCastException) {
+            throw ApiError.InvalidInput
+        }
+        try {
+            connection.requestMethod = "GET"
+            val status = connection.responseCode
+            if (status in 200..299) {
+                val text = connection.inputStream.use { it.readBytes() }.toString(Charsets.UTF_8)
+                return try {
+                    JSONArray(text)
+                } catch (e: JSONException) {
+                    throw ApiError.Internal
+                }
+            }
+            throw errorFrom(status, connection)
+        } catch (e: ApiError) {
+            throw e
+        } catch (e: IOException) {
+            throw ApiError.Network(e)
+        } finally {
+            connection.disconnect()
+        }
+    }
 
     /** POST [body] to [path] and parse the 2xx response body as JSON. */
     fun postJson(path: String, body: JSONObject, bearerToken: String? = null): JSONObject =

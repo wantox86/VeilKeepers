@@ -150,6 +150,31 @@
     <string name="bytes_kb">%1$d KB</string>
     <string name="bytes_b">%1$d B</string>
 
+    <!-- Account: change password -->
+    <string name="settings_account">Account</string>
+    <string name="settings_change_password">Change password</string>
+    <string name="settings_devices">Devices &amp; sessions</string>
+    <string name="change_password_title">Change password</string>
+    <string name="change_password_warning">All other devices will be signed out. Your vault data is NOT re-encrypted — only your unlock keys change.</string>
+    <string name="change_password_current">Current password</string>
+    <string name="change_password_new">New password</string>
+    <string name="change_password_confirm">Confirm new password</string>
+    <string name="change_password_submit">Change password</string>
+    <string name="change_password_progress">Changing password…</string>
+
+    <!-- Account: devices & sessions -->
+    <string name="devices_title">Devices &amp; sessions</string>
+    <string name="devices_loading">Loading devices…</string>
+    <string name="devices_empty">No active sessions found.</string>
+    <string name="devices_section">Active sessions</string>
+    <string name="devices_note">Every signed-in device for your account. Revoke any you do not recognize.</string>
+    <string name="devices_this">This device</string>
+    <string name="devices_created">Created: %1$s</string>
+    <string name="devices_revoke_title">Revoke session?</string>
+    <string name="devices_revoke_body">The device \"%1$s\" will be signed out. It will need the current password to sign in again.</string>
+    <string name="devices_revoke_confirm">Revoke</string>
+    <string name="devices_revoke_cd">Revoke session</string>
+
     <!-- Vault-level dialogs (MainActivity) -->
     <string name="vault_error_dialog_title">Something went wrong</string>
     <string name="vault_error_dialog_body">%1$s Your vault is unchanged; try again when ready.</string>

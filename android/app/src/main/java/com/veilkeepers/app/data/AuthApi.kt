@@ -44,6 +44,16 @@ interface AuthApi {
 
     /** POST /api/v1/auth/logout with the bearer token. */
     suspend fun logout(bearerToken: String)
+
+    /** PUT /api/v1/auth/password — change password (spec-1 §A.1 re-wrap flow). */
+    suspend fun changePassword(
+        currentAuthHashB64: String,
+        authHashB64: String,
+        kdfSaltB64: String,
+        kdfParams: KdfParams,
+        wrappedVaultKeyB64: String,
+        bearerToken: String,
+    )
 }
 
 /**
@@ -77,6 +87,20 @@ object AuthPayloads {
         .put("auth_hash", authHashB64)
         .put("device_identifier", deviceIdentifier)
         .put("device_name", deviceName)
+
+    /** changePasswordRequest: current_auth_hash / auth_hash / kdf_salt / kdf_params / wrapped_vault_key. */
+    fun changePasswordBody(
+        currentAuthHashB64: String,
+        authHashB64: String,
+        kdfSaltB64: String,
+        kdfParams: KdfParams,
+        wrappedVaultKeyB64: String,
+    ): JSONObject = JSONObject()
+        .put("current_auth_hash", currentAuthHashB64)
+        .put("auth_hash", authHashB64)
+        .put("kdf_salt", kdfSaltB64)
+        .put("kdf_params", JSONObject(kdfParams.encode()))
+        .put("wrapped_vault_key", wrappedVaultKeyB64)
 }
 
 /** [AuthApi] implementation backed by [ApiClient] (blocking I/O on Dispatchers.IO). */
@@ -144,6 +168,69 @@ class HttpAuthApi(private val client: ApiClient) : AuthApi {
         }
     }
 
+    override suspend fun changePassword(
+        currentAuthHashB64: String,
+        authHashB64: String,
+        kdfSaltB64: String,
+        kdfParams: KdfParams,
+        wrappedVaultKeyB64: String,
+        bearerToken: String,
+    ) {
+        withContext(Dispatchers.IO) {
+            client.putJson(
+                "/api/v1/auth/password",
+                AuthPayloads.changePasswordBody(
+                    currentAuthHashB64, authHashB64, kdfSaltB64, kdfParams, wrappedVaultKeyB64,
+                ),
+                bearerToken = bearerToken,
+            )
+        }
+    }
+
     private fun encodeSegment(value: String): String =
         URLEncoder.encode(value, "UTF-8").replace("+", "%20")
+}
+
+/** One row of GET /api/v1/devices (backend devices.go deviceDTO). */
+data class DeviceEntry(
+    val id: Long,
+    val deviceIdentifier: String,
+    val deviceName: String,
+    val createdAt: String,
+)
+
+/**
+ * Device surface of the backend contract (backend/internal/server/devices.go).
+ * An interface so unit tests can inject fakes.
+ */
+interface DeviceApi {
+    /** GET /api/v1/devices → list of the caller's devices. */
+    suspend fun listDevices(bearerToken: String): List<DeviceEntry>
+
+    /** DELETE /api/v1/devices/{id} → revoke a device and its sessions. */
+    suspend fun revokeDevice(deviceId: Long, bearerToken: String)
+}
+
+/** [DeviceApi] implementation backed by [ApiClient]. */
+class HttpDeviceApi(private val client: ApiClient) : DeviceApi {
+
+    override suspend fun listDevices(bearerToken: String): List<DeviceEntry> =
+        withContext(Dispatchers.IO) {
+            val arr = client.getJsonArray("/api/v1/devices", bearerToken = bearerToken)
+            (0 until arr.length()).map { i ->
+                val obj = arr.getJSONObject(i)
+                DeviceEntry(
+                    id = obj.getLong("id"),
+                    deviceIdentifier = obj.optString("device_identifier", ""),
+                    deviceName = obj.optString("device_name", ""),
+                    createdAt = obj.optString("created_at", ""),
+                )
+            }
+        }
+
+    override suspend fun revokeDevice(deviceId: Long, bearerToken: String) {
+        withContext(Dispatchers.IO) {
+            client.deleteJson("/api/v1/devices/$deviceId", bearerToken = bearerToken)
+        }
+    }
 }
