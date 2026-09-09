@@ -20,6 +20,16 @@ services:
       retries: 10
       start_period: 30s
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '1.0'
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
 
   veilkeepers-api:
     build: ./backend
@@ -34,6 +44,7 @@ services:
       REGISTRATION_OPEN: ${REGISTRATION_OPEN:-true}
       VK_ATTACHMENT_DIR: ${VK_ATTACHMENT_DIR:-/data/attachments}
       VK_ATTACHMENT_MAX_BYTES: ${VK_ATTACHMENT_MAX_BYTES:-10485760}
+      GOMEMLIMIT: 96MiB
     # Attachment ciphertext lives on the host filesystem, never in MySQL.
     # The container runs as distroless nonroot (uid/gid 65532), so the host
     # directory must be owned by 65532:65532 or startup fails the probe:
@@ -46,6 +57,16 @@ services:
       retries: 5
       start_period: 40s
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+          cpus: '0.5'
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
 
 volumes:
   mysql-data:

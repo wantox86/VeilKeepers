@@ -63,6 +63,7 @@ it can authenticate — and is accepted per spec-1 §A.1.
 
 ```
 .
+├── android/                 # Android client (Kotlin + Jetpack Compose + Material 3)
 ├── backend/                 # Go API (stdlib + mysql driver only)
 │   ├── cmd/veilkeepers-api/ # Entrypoint (config, logging, graceful shutdown)
 │   ├── internal/config/     # Environment configuration
@@ -73,14 +74,27 @@ it can authenticate — and is accepted per spec-1 §A.1.
 │   ├── internal/server/     # HTTP mux: probes + /api/v1 routes
 │   └── Dockerfile           # Multi-stage build → distroless
 ├── infra/mysql/conf/        # MySQL server tuning (veilkeepers.cnf)
+├── scripts/                 # Backup and restore scripts (Sprint 10)
 ├── data/attachments/        # Attachment ciphertext (bind-mounted into the API)
-├── docs/                    # architecture, security, and API docs
-├── docker-compose.yml       # MySQL 8.4 + veilkeepers-api
+├── docs/                    # architecture, security, API docs, and deployment guides
+├── docker-compose.yml       # MySQL 8.4 + veilkeepers-api (hardened: limits, log rotation)
 └── .env.example             # Environment template (placeholders only)
 ```
+
+## Homelab Deployment
+
+Veil Keepers is designed for self-hosted deployment on a homelab server using Docker Compose. The stack includes resource limits, log rotation, health checks, and automated backup/restore scripts.
+
+See [`docs/deployment/homelab.md`](docs/deployment/homelab.md) for the full deployment guide: prerequisites, initial setup, verification, update procedure, resource monitoring, troubleshooting, and the V0.2+ roadmap (TLS, reverse proxy, container registry).
+
+## Backup & Restore
+
+Infrastructure-level backup of the MySQL database and encrypted attachment directory. Backup sets are timestamped with automatic retention (daily 7 days, weekly 4 weeks) and `chmod 600` permissions — backup files contain encrypted vault data and must be treated as sensitive.
+
+See [`scripts/README.md`](scripts/README.md) for usage, cron scheduling, systemd timer examples, and the restore drill procedure.
 
 ## Not yet implemented (later sprints)
 
 - Password change / vault re-wrap (`PUT /api/v1/auth/password`)
-- Vault categories and encrypted vault items
-- Android client integration
+- TLS/HTTPS via reverse proxy (V0.2+)
+- Container registry and auto-deploy from CI

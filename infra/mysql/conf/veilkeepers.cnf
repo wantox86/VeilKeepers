@@ -5,3 +5,8 @@ performance_schema=OFF
 # mysqlx variables are removed in MySQL 9.x — delete this line if the image tag is bumped
 mysqlx=0
 max_connections=50
+# Flush redo log to OS cache on commit (not to disk). Acceptable for homelab:
+# at most ~1 s of committed data can be lost on a crash — vault ciphertext is
+# the only data at rest and re-derivation from the Android client is the path
+# of record. Saves significant I/O vs the default 1 (full fsync per commit).
+innodb_flush_log_at_trx_commit=2
