@@ -136,6 +136,28 @@ func (f *fakeStore) UserByUsername(_ context.Context, username string) (*store.U
 	}, nil
 }
 
+// UserByID implements auth.Store.
+func (f *fakeStore) UserByID(_ context.Context, userID uint64) (*store.User, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	for _, u := range f.users {
+		if u.id == userID {
+			return &store.User{
+				ID:              u.id,
+				Username:        u.username,
+				AuthHash:        u.authHash,
+				KDFSalt:         u.kdfSalt,
+				KDFParams:       u.kdfParams,
+				WrappedVaultKey: u.wrappedVaultKey,
+				CreatedAt:       u.createdAt,
+				UpdatedAt:       u.createdAt,
+			}, nil
+		}
+	}
+	return nil, store.ErrNotFound
+}
+
 // GetKDF implements auth.Store.
 func (f *fakeStore) GetKDF(_ context.Context, username string) (*store.KDFInfo, error) {
 	f.mu.Lock()
@@ -657,4 +679,35 @@ func (f *fakeStore) sessionExpiry(tokenHash string) (time.Time, bool) {
 		}
 	}
 	return time.Time{}, false
+}
+
+// ChangePassword implements auth.Store.
+func (f *fakeStore) ChangePassword(_ context.Context, userID uint64, authHash string, kdfSalt []byte, kdfParams json.RawMessage, wrappedVaultKey []byte) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	for _, u := range f.users {
+		if u.id == userID {
+			u.authHash = authHash
+			u.kdfSalt = append([]byte(nil), kdfSalt...)
+			u.kdfParams = append([]byte(nil), kdfParams...)
+			u.wrappedVaultKey = append([]byte(nil), wrappedVaultKey...)
+			return nil
+		}
+	}
+	return store.ErrNotFound
+}
+
+// RevokeOtherSessions implements auth.Store.
+func (f *fakeStore) RevokeOtherSessions(_ context.Context, userID, keepSessionID uint64) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	now := sql.NullTime{Time: time.Now().UTC(), Valid: true}
+	for _, s := range f.sessions {
+		if s.userID == userID && s.id != keepSessionID && !s.revokedAt.Valid {
+			s.revokedAt = now
+		}
+	}
+	return nil
 }

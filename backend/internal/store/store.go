@@ -114,6 +114,25 @@ func (s *Store) UserByUsername(ctx context.Context, username string) (*User, err
 	return u, nil
 }
 
+// UserByID fetches a full user row by primary key, or ErrNotFound.
+func (s *Store) UserByID(ctx context.Context, userID uint64) (*User, error) {
+	u := &User{}
+	err := s.db.QueryRowContext(ctx,
+		`SELECT id, username, auth_hash, kdf_salt, kdf_params, wrapped_vault_key,
+		        created_at, updated_at
+		 FROM users WHERE id = ?`,
+		userID,
+	).Scan(&u.ID, &u.Username, &u.AuthHash, &u.KDFSalt, &u.KDFParams,
+		&u.WrappedVaultKey, &u.CreatedAt, &u.UpdatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	return u, nil
+}
+
 // GetKDF returns only the KDF salt and parameters for a username, or
 // ErrNotFound. Keeping this narrow avoids leaking vault material pre-login.
 func (s *Store) GetKDF(ctx context.Context, username string) (*KDFInfo, error) {
@@ -316,4 +335,41 @@ func (s *Store) RevokeDeviceAndSessions(ctx context.Context, userID, deviceID ui
 	}
 
 	return tx.Commit()
+}
+
+// ChangePassword atomically replaces a user's auth material (auth_hash,
+// kdf_salt, kdf_params, wrapped_vault_key). The caller is responsible for
+// verifying the old password before calling. Returns ErrNotFound when
+// userID does not exist.
+func (s *Store) ChangePassword(ctx context.Context, userID uint64, authHash string, kdfSalt []byte, kdfParams json.RawMessage, wrappedVaultKey []byte) error {
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE users
+		    SET auth_hash = ?, kdf_salt = ?, kdf_params = ?, wrapped_vault_key = ?, updated_at = NOW(6)
+		  WHERE id = ?`,
+		authHash, kdfSalt, []byte(kdfParams), wrappedVaultKey, userID,
+	)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// RevokeOtherSessions revokes every active session belonging to userID
+// except the one identified by keepSessionID. This is used after a
+// password change to sign out every other device while keeping the
+// caller's session alive.
+func (s *Store) RevokeOtherSessions(ctx context.Context, userID, keepSessionID uint64) error {
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE sessions SET revoked_at = NOW(6)
+		  WHERE user_id = ? AND id != ? AND revoked_at IS NULL`,
+		userID, keepSessionID,
+	)
+	return err
 }

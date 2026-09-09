@@ -679,3 +679,158 @@ func TestUnknownPathsAndMethods(t *testing.T) {
 		t.Fatalf("GET /login status = %d, want %d", rec.Code, http.StatusMethodNotAllowed)
 	}
 }
+
+// --- change-password tests (Sprint 11) ---
+
+var (
+	newAuthHashB64 = b64Of(digest("new secure password"))
+	newSaltB64     = b64Of([]byte{16, 15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1})
+	newVaultKeyB64 = b64Of(bytes.Repeat([]byte{0xCD}, 60))
+)
+
+func changePassBody(currentHash, newHash, newSalt, newWrapped string) []byte {
+	body, _ := json.Marshal(map[string]any{
+		"current_auth_hash": currentHash,
+		"auth_hash":         newHash,
+		"kdf_salt":          newSalt,
+		"kdf_params":        testKDFParams,
+		"wrapped_vault_key": newWrapped,
+	})
+	return body
+}
+
+func TestChangePasswordSuccess(t *testing.T) {
+	e := newTestEnv(t, true, nil)
+
+	// Register + login device A.
+	tokenA := e.loginToken("alice")
+
+	// Login device B (different device_identifier).
+	devBBody, _ := json.Marshal(map[string]string{
+		"username":          "alice",
+		"auth_hash":         testAuthHashB64,
+		"device_identifier": "dev-2",
+		"device_name":       "Test Tablet",
+	})
+	rec := e.do(http.MethodPost, "/api/v1/auth/login", "", devBBody)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("login B status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	var respB loginResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &respB); err != nil {
+		t.Fatalf("login B body: %v", err)
+	}
+	tokenB := respB.SessionToken
+
+	// Both tokens work before change.
+	rec = e.do(http.MethodGet, "/api/v1/devices", tokenA, nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("A pre-change status = %d", rec.Code)
+	}
+	rec = e.do(http.MethodGet, "/api/v1/devices", tokenB, nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("B pre-change status = %d", rec.Code)
+	}
+
+	// Change password from device A.
+	rec = e.do(http.MethodPut, "/api/v1/auth/password", tokenA,
+		changePassBody(testAuthHashB64, newAuthHashB64, newSaltB64, newVaultKeyB64))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("change password status = %d, want %d; body = %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	// Token A still alive.
+	rec = e.do(http.MethodGet, "/api/v1/devices", tokenA, nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("A post-change status = %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	// Token B revoked.
+	rec = e.do(http.MethodGet, "/api/v1/devices", tokenB, nil)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("B post-change status = %d, want %d", rec.Code, http.StatusUnauthorized)
+	}
+
+	// Login with new password works.
+	rec = e.login("alice", newAuthHashB64)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("login new password status = %d, want %d; body = %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	// Login with old password fails.
+	rec = e.login("alice", testAuthHashB64)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("login old password status = %d, want %d", rec.Code, http.StatusUnauthorized)
+	}
+
+	// KDF returns the new salt.
+	rec = e.do(http.MethodGet, "/api/v1/auth/kdf/alice", "", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("kdf status = %d", rec.Code)
+	}
+	var kdf kdfResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &kdf); err != nil {
+		t.Fatalf("kdf body: %v", err)
+	}
+	if kdf.KDFSalt != newSaltB64 {
+		t.Fatalf("kdf salt = %q, want %q", kdf.KDFSalt, newSaltB64)
+	}
+
+	// New login returns the new wrapped vault key.
+	rec = e.login("alice", newAuthHashB64)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("login new pw for wvk status = %d", rec.Code)
+	}
+	var loginResp loginResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &loginResp); err != nil {
+		t.Fatalf("login body: %v", err)
+	}
+	if loginResp.WrappedVaultKey != newVaultKeyB64 {
+		t.Fatalf("wrapped_vault_key = %q, want %q", loginResp.WrappedVaultKey, newVaultKeyB64)
+	}
+}
+
+func TestChangePasswordWrongCurrent(t *testing.T) {
+	e := newTestEnv(t, true, nil)
+	token := e.loginToken("alice")
+
+	rec := e.do(http.MethodPut, "/api/v1/auth/password", token,
+		changePassBody(wrongAuthHashB64, newAuthHashB64, newSaltB64, newVaultKeyB64))
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want %d; body = %s", rec.Code, http.StatusUnauthorized, rec.Body.String())
+	}
+	if code := errorCode(t, rec); code != codeWrongPassword {
+		t.Fatalf("error = %q, want %q", code, codeWrongPassword)
+	}
+}
+
+func TestChangePasswordInvalidPayload(t *testing.T) {
+	e := newTestEnv(t, true, nil)
+	token := e.loginToken("alice")
+
+	// Missing fields.
+	body, _ := json.Marshal(map[string]string{"current_auth_hash": testAuthHashB64})
+	rec := e.do(http.MethodPut, "/api/v1/auth/password", token, body)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("missing fields status = %d, want %d", rec.Code, http.StatusBadRequest)
+	}
+
+	// Invalid base64 auth_hash.
+	rec = e.do(http.MethodPut, "/api/v1/auth/password", token,
+		changePassBody(testAuthHashB64, "not-valid-b64!!!", newSaltB64, newVaultKeyB64))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("bad b64 status = %d, want %d", rec.Code, http.StatusBadRequest)
+	}
+}
+
+func TestChangePasswordNoAuth(t *testing.T) {
+	e := newTestEnv(t, true, nil)
+	rec := e.do(http.MethodPut, "/api/v1/auth/password", "",
+		changePassBody(testAuthHashB64, newAuthHashB64, newSaltB64, newVaultKeyB64))
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnauthorized)
+	}
+	if code := errorCode(t, rec); code != "invalid_token" {
+		t.Fatalf("error = %q, want invalid_token", code)
+	}
+}

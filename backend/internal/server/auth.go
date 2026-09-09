@@ -33,6 +33,7 @@ const (
 	codeInvalidCredentials = "invalid_credentials"
 	codeNotFound           = "not_found"
 	codeInternal           = "internal_error"
+	codeWrongPassword      = "wrong_password"
 	msgRateLimited         = "too many requests, please slow down"
 	msgRegistrationClosed  = "registration is not open"
 	msgInvalidInput        = "request is malformed or invalid"
@@ -40,10 +41,12 @@ const (
 	msgInvalidCredentials  = "username or password is incorrect"
 	msgNotFound            = "resource not found"
 	msgInternal            = "something went wrong"
+	msgWrongPassword       = "current password is incorrect"
 	msgRegistrationOutcome = "register"
 	msgLoginOutcome        = "login"
 	msgLogoutOutcome       = "logout"
 	msgKDFOutcome          = "kdf_lookup"
+	msgChangePassOutcome   = "change_password"
 	msgDevicesOutcome      = "devices"
 	msgDeviceDeleteOutcome = "device_delete"
 )
@@ -79,6 +82,15 @@ type kdfResponse struct {
 	KDFParams json.RawMessage `json:"kdf_params"`
 }
 
+// changePasswordRequest is the PUT /api/v1/auth/password payload.
+type changePasswordRequest struct {
+	CurrentAuthHash string          `json:"current_auth_hash"`
+	AuthHash        string          `json:"auth_hash"`
+	KDFSalt         string          `json:"kdf_salt"`
+	KDFParams       json.RawMessage `json:"kdf_params"`
+	WrappedVaultKey string          `json:"wrapped_vault_key"`
+}
+
 // authAPI groups the state of the /api/v1/auth handlers.
 type authAPI struct {
 	cfg      config.Config
@@ -97,6 +109,8 @@ func registerAuthRoutes(mux *http.ServeMux, cfg config.Config, svc *auth.Service
 	mux.Handle("POST /api/v1/auth/logout",
 		a.limited(auth.RequireSession(http.HandlerFunc(a.handleLogout), st)))
 	mux.HandleFunc("GET /api/v1/auth/kdf/{username}", a.limited(http.HandlerFunc(a.handleKDF)))
+	mux.Handle("PUT /api/v1/auth/password",
+		a.limited(auth.RequireSession(http.HandlerFunc(a.handleChangePassword), st)))
 }
 
 // limited wraps a handler with the per-IP token-bucket check. Denied
@@ -245,4 +259,50 @@ func (a *authAPI) handleKDF(w http.ResponseWriter, r *http.Request) {
 
 	writeJSONBody(w, http.StatusOK, kdfResponse{KDFSalt: saltB64, KDFParams: params})
 	slog.Info(outcome, "code", "ok")
+}
+
+// handleChangePassword implements PUT /api/v1/auth/password (spec-1 §E).
+// The caller must be authenticated. The current password is verified
+// before the auth material is replaced. All other sessions are revoked;
+// the caller's session stays alive.
+func (a *authAPI) handleChangePassword(w http.ResponseWriter, r *http.Request) {
+	outcome := msgChangePassOutcome
+
+	r.Body = http.MaxBytesReader(w, r.Body, maxAuthBodyBytes)
+	var req changePasswordRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, codeInvalidInput, msgInvalidInput)
+		slog.Info(outcome, "code", codeInvalidInput)
+		return
+	}
+
+	if req.CurrentAuthHash == "" || req.AuthHash == "" || req.KDFSalt == "" ||
+		req.KDFParams == nil || req.WrappedVaultKey == "" {
+		writeError(w, http.StatusBadRequest, codeInvalidInput, msgInvalidInput)
+		slog.Info(outcome, "code", codeInvalidInput)
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), requestTimeout)
+	defer cancel()
+
+	userID := auth.UserID(r.Context())
+	sessionID := auth.SessionID(r.Context())
+
+	err := a.svc.ChangePassword(ctx, userID, sessionID,
+		req.CurrentAuthHash, req.AuthHash, req.KDFSalt, req.KDFParams, req.WrappedVaultKey)
+	switch {
+	case err == nil:
+		writeJSON(w, http.StatusOK, "ok")
+		slog.Info(outcome, "code", "ok", "user_id", userID)
+	case errors.Is(err, auth.ErrWrongPassword):
+		writeError(w, http.StatusUnauthorized, codeWrongPassword, msgWrongPassword)
+		slog.Info(outcome, "code", codeWrongPassword, "user_id", userID)
+	case errors.Is(err, auth.ErrInvalidInput):
+		writeError(w, http.StatusBadRequest, codeInvalidInput, msgInvalidInput)
+		slog.Info(outcome, "code", codeInvalidInput)
+	default:
+		writeError(w, http.StatusInternalServerError, codeInternal, msgInternal)
+		slog.Error(outcome+" failed", "err", err.Error())
+	}
 }

@@ -50,6 +50,9 @@ var (
 	ErrUsernameTaken = errors.New("username taken")
 	// ErrInvalidCredentials is the single generic login failure error.
 	ErrInvalidCredentials = errors.New("invalid credentials")
+	// ErrWrongPassword indicates the current password verification
+	// failed during a password change.
+	ErrWrongPassword = errors.New("wrong password")
 )
 
 // Store is the persistence surface required by Service. *store.Store
@@ -57,10 +60,13 @@ var (
 type Store interface {
 	CreateUser(ctx context.Context, username, authHash string, kdfSalt []byte, kdfParams json.RawMessage, wrappedVaultKey []byte) error
 	UserByUsername(ctx context.Context, username string) (*store.User, error)
+	UserByID(ctx context.Context, userID uint64) (*store.User, error)
 	GetKDF(ctx context.Context, username string) (*store.KDFInfo, error)
 	UpsertDevice(ctx context.Context, userID uint64, identifier, name string) (*store.Device, error)
 	CreateSession(ctx context.Context, userID, deviceID uint64, tokenHash string, expiresAt time.Time) (uint64, error)
 	RevokeSession(ctx context.Context, sessionID uint64) error
+	ChangePassword(ctx context.Context, userID uint64, authHash string, kdfSalt []byte, kdfParams json.RawMessage, wrappedVaultKey []byte) error
+	RevokeOtherSessions(ctx context.Context, userID, keepSessionID uint64) error
 }
 
 // Service implements the authentication use cases on top of Store.
@@ -184,6 +190,53 @@ func (s *Service) Login(ctx context.Context, username, authHashB64, deviceIdenti
 // silent no-op at the store level, making logout idempotent.
 func (s *Service) Logout(ctx context.Context, sessionID uint64) error {
 	return s.store.RevokeSession(ctx, sessionID)
+}
+
+// ChangePassword implements spec-1 §A.1 (Flow Ganti Password). The
+// client sends new auth material (auth_hash', kdf_salt', kdf_params',
+// wrapped_vault_key') along with the current auth_hash for verification.
+// On success the user's credentials and wrapped vault key are updated
+// atomically, and every session other than keepSessionID is revoked.
+// The vault key itself does not change — vault data is not re-encrypted.
+func (s *Service) ChangePassword(ctx context.Context, userID, keepSessionID uint64, currentAuthHashB64, newAuthHashB64, newKDFSaltB64 string, newKDFParamsJSON json.RawMessage, newWrappedVaultKeyB64 string) error {
+	u, err := s.store.UserByID(ctx, userID)
+	if err != nil {
+		return err
+	}
+
+	if bcrypt.CompareHashAndPassword([]byte(u.AuthHash), []byte(currentAuthHashB64)) != nil {
+		return ErrWrongPassword
+	}
+
+	newAuthHash, err := decodeB64(newAuthHashB64)
+	if err != nil || len(newAuthHash) != authHashBytes {
+		return ErrInvalidInput
+	}
+
+	newKDFSalt, err := decodeB64(newKDFSaltB64)
+	if err != nil || len(newKDFSalt) < minKDFSaltLen || len(newKDFSalt) > maxKDFSaltLen {
+		return ErrInvalidInput
+	}
+
+	newWrappedVaultKey, err := decodeB64(newWrappedVaultKeyB64)
+	if err != nil || len(newWrappedVaultKey) == 0 || len(newWrappedVaultKey) > maxVaultKeyLen {
+		return ErrInvalidInput
+	}
+
+	if err := validateKDFParams(newKDFParamsJSON); err != nil {
+		return ErrInvalidInput
+	}
+
+	bcryptHash, err := bcrypt.GenerateFromPassword([]byte(newAuthHashB64), s.BcryptCost)
+	if err != nil {
+		return ErrInvalidInput
+	}
+
+	if err := s.store.ChangePassword(ctx, userID, string(bcryptHash), newKDFSalt, newKDFParamsJSON, newWrappedVaultKey); err != nil {
+		return err
+	}
+
+	return s.store.RevokeOtherSessions(ctx, userID, keepSessionID)
 }
 
 // GetKDF returns the base64 KDF salt and raw KDF parameters for a
